@@ -9,6 +9,8 @@ const DEFAULT_SETTINGS = {
   },
   notificationsEnabled: false,
   alertMinutes: [10, 5],
+  theme: "auto",
+  routeId: "to-tokuda",
 };
 
 export function loadSettings() {
@@ -37,7 +39,7 @@ export function saveCache(payload) {
     CACHE_KEY,
     JSON.stringify({
       savedAt: Date.now(),
-      arrivals: payload,
+      ...payload,
     }),
   );
 }

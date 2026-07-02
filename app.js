@@ -7,6 +7,29 @@ import {
   saveNotifiedState,
   saveSettings,
 } from "./settings.js";
+import {
+  dedupeDepartures,
+  filterLine73Departures,
+  getConfidence,
+  getStatusBadge,
+  parseBoardResponse,
+} from "./lib/transit.js";
+import {
+  formatTypicalDelay,
+  getTypicalDelay,
+  recordDelay,
+} from "./lib/delay-history.js";
+import {
+  buildJourneysForRoute,
+  buildTripIndex,
+  getJourneyBreakdown,
+  getLeaveMessageForJourney,
+  getRoute,
+  ROUTES,
+} from "./lib/routes.js";
+
+const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
+const APP_VERSION = "8";
 
 const CONFIG = {
   apiBase: "https://api.livetransport.eu/sofia",
@@ -20,50 +43,65 @@ const CONFIG = {
       id: "tokuda",
       name: "МБАЛ Токуда",
       shortName: "Токуда",
-      directionLabel: "ж.к. Овча купел 2",
       lat: 42.66716,
       lon: 23.32672,
       stopIds: ["0205", "0206", "2777"],
-      matchDirection: (destination) => {
-        const text = `${destination?.bg ?? ""} ${destination?.en ?? ""}`.toLowerCase();
-        return /овча купел|ovcha kupel/.test(text);
-      },
     },
     {
       id: "bulgaria",
       name: "бул. България",
       shortName: "България",
-      directionLabel: "ж.к. Младост",
       lat: 42.67262,
       lon: 23.2937,
       stopIds: ["0290", "0291", "6564", "6275"],
-      matchDirection: (destination) => {
-        const text = `${destination?.bg ?? ""} ${destination?.en ?? ""}`.toLowerCase();
-        return /младост|mladost/.test(text);
-      },
     },
   ],
 };
 
 const SOFIA_TZ = "Europe/Sofia";
+const STOP_BY_ID = Object.fromEntries(CONFIG.stops.map((stop) => [stop.id, stop]));
 
-const stopsRoot = document.getElementById("stops");
 const statusEl = document.getElementById("status");
 const widgetEl = document.getElementById("widget");
+const routeCardEl = document.getElementById("route-card");
+const routeSwitchEl = document.getElementById("route-switch");
 const settingsPanel = document.getElementById("settings-panel");
 const settingsToggle = document.getElementById("settings-toggle");
 const installBanner = document.getElementById("install-banner");
 const installButton = document.getElementById("install-button");
 const installDismiss = document.getElementById("install-dismiss");
 const refreshButton = document.getElementById("refresh-button");
+const pullIndicator = document.getElementById("pull-indicator");
 
 let settings = loadSettings();
-let cachedArrivals = new Map();
+let cachedJourneys = new Map();
 let cachedWeather = new Map();
 let lastUpdatedAt = null;
 let isStale = false;
+let dataSource = "live";
 let deferredInstallPrompt = null;
 let notifiedState = loadNotifiedState();
+
+function getActiveRoute() {
+  return getRoute(settings.routeId);
+}
+
+function ensureProductionUrl() {
+  const host = location.hostname;
+  if (host === "localhost" || host === "127.0.0.1" || host === PRODUCTION_HOST) return;
+
+  if (host.endsWith(".vercel.app")) {
+    location.replace(`https://${PRODUCTION_HOST}${location.pathname}${location.search}`);
+  }
+}
+
+function applyTheme(theme = settings.theme) {
+  if (theme === "auto") {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = theme;
+  }
+}
 
 function formatMinutes(ms) {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
@@ -85,93 +123,6 @@ function formatClock(timestamp) {
     minute: "2-digit",
   }).format(new Date(timestamp));
 }
-
-function enrichDeparture(departure) {
-  const scheduled = departure.time?.scheduled;
-  const actual = departure.time?.actual ?? scheduled;
-  const delayMinutes =
-    typeof scheduled === "number" && typeof actual === "number"
-      ? Math.round((actual - scheduled) / 60_000)
-      : 0;
-
-  return {
-    ...departure,
-    arrivalTime: actual,
-    scheduledTime: scheduled,
-    delayMinutes,
-    isLive: Boolean(departure.activeTrip),
-  };
-}
-
-function getStatusBadge(departure) {
-  if (!departure.isLive) {
-    return { text: "по разписание", className: "status-scheduled" };
-  }
-
-  if (departure.delayMinutes >= 3) {
-    return { text: `+${departure.delayMinutes} мин`, className: "status-late" };
-  }
-
-  if (departure.delayMinutes <= -2) {
-    return { text: `${Math.abs(departure.delayMinutes)} мин по-рано`, className: "status-early" };
-  }
-
-  return { text: "навреме", className: "status-ontime" };
-}
-
-function getLeaveMessage(arrivalTime, walkingMinutes) {
-  const leaveIn = arrivalTime - Date.now() - walkingMinutes * 60_000;
-
-  if (leaveIn <= 0) {
-    return { text: "🏃 Тръгни сега!", className: "leave-now urgent" };
-  }
-
-  return {
-    text: `🚶 Тръгни след ${formatMinutes(leaveIn)}`,
-    className: leaveIn <= 2 * 60_000 ? "leave-now soon" : "leave-now",
-  };
-}
-
-const STOP_EMOJI = {
-  tokuda: "🏥",
-  bulgaria: "🌇",
-};
-
-function createStopCard(stop) {
-  const card = document.createElement("section");
-  card.className = `stop-card stop-card--${stop.id}`;
-  card.dataset.stopId = stop.id;
-  card.innerHTML = `
-    <div class="stop-header">
-      <div>
-        <h2><span class="stop-emoji">${STOP_EMOJI[stop.id] ?? "🚏"}</span> ${stop.name}</h2>
-        <p class="direction">→ ${stop.directionLabel}</p>
-      </div>
-      <span class="status-badge status-scheduled">—</span>
-    </div>
-    <div class="weather" aria-live="polite">
-      <div class="weather-header">
-        <span class="weather-title">🌤️ Време · Gemini</span>
-        <span class="weather-rain">—</span>
-      </div>
-      <p class="weather-text">Зареждане на прогноза...</p>
-    </div>
-    <div class="arrival" aria-live="polite">
-      <p class="label">⏱️ Следващ автобус след</p>
-      <p class="time">—</p>
-      <p class="leave-now">—</p>
-      <p class="meta">Зареждане...</p>
-    </div>
-    <div class="upcoming" hidden>
-      <h3>🗓️ Следващи курсове</h3>
-      <ul></ul>
-    </div>
-  `;
-  stopsRoot.appendChild(card);
-  return card;
-}
-
-const APP_VERSION = "6";
 
 const RAIN_CODES = new Set([
   51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
@@ -256,9 +207,78 @@ async function fetchWeather(stop) {
   return fetchLocalWeather(stop);
 }
 
-function renderWeatherCard(card, weather) {
-  const rainEl = card.querySelector(".weather-rain");
-  const textEl = card.querySelector(".weather-text");
+async function fetchBoard(stopId) {
+  const response = await fetch(getBoardUrl(stopId));
+  if (!response.ok) {
+    throw new Error(`API грешка ${response.status} за спирка ${stopId}`);
+  }
+
+  const source = response.headers.get("X-Data-Source");
+  if (source) dataSource = source;
+
+  const raw = await response.text();
+  if (!raw.trim().startsWith("{")) {
+    throw new Error(
+      "Сървърът върна невалиден отговор. Използвай production линка: sofia-bus-73.vercel.app",
+    );
+  }
+
+  const staleHeader = response.headers.get("X-Data-Stale") === "true";
+  if (staleHeader) isStale = true;
+
+  return parseBoardResponse(raw);
+}
+
+async function fetchAllBoards() {
+  const allStopIds = [...new Set(CONFIG.stops.flatMap((stop) => stop.stopIds))];
+  const results = await Promise.allSettled(allStopIds.map((stopId) => fetchBoard(stopId)));
+  const cache = new Map();
+  let failedBoards = 0;
+
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      cache.set(allStopIds[index], result.value);
+    } else {
+      failedBoards += 1;
+    }
+  });
+
+  return { cache, failedBoards, total: allStopIds.length };
+}
+
+function buildJourneyData(boardCache) {
+  const tripIndex = buildTripIndex(boardCache);
+  const journeysByRoute = new Map();
+
+  for (const route of Object.values(ROUTES)) {
+    const boardingStop = STOP_BY_ID[route.boardingStopId];
+    const destinationStop = STOP_BY_ID[route.destinationStopId];
+    const rawDepartures = boardingStop.stopIds.flatMap((stopId) => boardCache.get(stopId) ?? []);
+    const boardingDepartures = dedupeDepartures(
+      filterLine73Departures(rawDepartures, route.matchDirection),
+    );
+
+    for (const departure of boardingDepartures) {
+      if (departure.isLive && departure.delayMinutes !== 0) {
+        recordDelay(route.boardingStopId, departure.delayMinutes);
+      }
+    }
+
+    const journeys = buildJourneysForRoute(
+      route,
+      boardingDepartures,
+      destinationStop.stopIds,
+      tripIndex,
+    );
+    journeysByRoute.set(route.id, journeys);
+  }
+
+  return journeysByRoute;
+}
+
+function renderWeather(weather) {
+  const rainEl = routeCardEl.querySelector(".weather-rain");
+  const textEl = routeCardEl.querySelector(".weather-text");
 
   if (!weather) {
     rainEl.textContent = "—";
@@ -273,109 +293,113 @@ function renderWeatherCard(card, weather) {
 }
 
 async function refreshWeather() {
-  await Promise.all(
-    CONFIG.stops.map(async (stop) => {
-      const card = document.querySelector(`[data-stop-id="${stop.id}"]`);
-      if (!card) return;
+  const route = getActiveRoute();
+  const boardingStop = STOP_BY_ID[route.boardingStopId];
 
-      try {
-        const weather = await fetchWeather(stop);
-        cachedWeather.set(stop.id, weather);
-        renderWeatherCard(card, weather);
-      } catch {
-        renderWeatherCard(card, cachedWeather.get(stop.id) ?? null);
-      }
-    }),
-  );
+  try {
+    const weather = await fetchWeather(boardingStop);
+    cachedWeather.set(boardingStop.id, weather);
+    renderWeather(weather);
+  } catch {
+    renderWeather(cachedWeather.get(boardingStop.id) ?? null);
+  }
 }
 
-async function fetchBoard(stopId) {
-  const response = await fetch(getBoardUrl(stopId));
-  if (!response.ok) {
-    throw new Error(`API грешка ${response.status} за спирка ${stopId}`);
+function updateRouteSwitch() {
+  for (const button of routeSwitchEl.querySelectorAll("[data-route-id]")) {
+    const active = button.dataset.routeId === settings.routeId;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
   }
-
-  const raw = await response.text();
-  if (!raw.trim().startsWith("{")) {
-    throw new Error(
-      "Сървърът върна невалиден отговор. Използвай production линка: sofia-bus-73.vercel.app",
-    );
-  }
-
-  const data = JSON.parse(raw);
-  return data.departures ?? [];
 }
 
-async function fetchArrivalsForStop(stop) {
-  const boards = await Promise.allSettled(stop.stopIds.map((stopId) => fetchBoard(stopId)));
-  const failedBoards = boards.filter((result) => result.status === "rejected").length;
+function renderRouteCard() {
+  const route = getActiveRoute();
+  const boardingStop = STOP_BY_ID[route.boardingStopId];
+  const destinationStop = STOP_BY_ID[route.destinationStopId];
+  const journeys = cachedJourneys.get(route.id) ?? [];
+  const now = Date.now();
 
-  const departures = boards
-    .filter((result) => result.status === "fulfilled")
-    .flatMap((result) => result.value)
-    .filter(
-      (departure) =>
-        departure.lineId === CONFIG.lineId && stop.matchDirection(departure.destination),
-    )
-    .map(enrichDeparture)
-    .filter((departure) => typeof departure.arrivalTime === "number")
-    .sort((a, b) => a.arrivalTime - b.arrivalTime);
+  routeCardEl.dataset.routeId = route.id;
+  routeCardEl.querySelector(".route-title").textContent = `${route.emoji} ${route.label}`;
+  routeCardEl.querySelector(".route-boarding").textContent =
+    `Качваш се: ${boardingStop.name} · посока ${route.directionLabel}`;
 
-  const unique = [];
-  const seen = new Set();
+  const countdownEl = routeCardEl.querySelector(".route-time");
+  const etaEl = routeCardEl.querySelector(".route-eta");
+  const breakdownEl = routeCardEl.querySelector(".route-breakdown");
+  const busWaitEl = routeCardEl.querySelector(".route-bus-wait");
+  const leaveEl = routeCardEl.querySelector(".leave-now");
+  const badgeEl = routeCardEl.querySelector(".status-badge");
+  const confidenceBadgeEl = routeCardEl.querySelector(".confidence-badge");
+  const confidenceHintEl = routeCardEl.querySelector(".confidence-hint");
+  const historyEl = routeCardEl.querySelector(".delay-history");
+  const upcomingEl = routeCardEl.querySelector(".upcoming");
+  const upcomingListEl = routeCardEl.querySelector(".upcoming ul");
 
-  for (const departure of departures) {
-    const key = `${departure.tripId}-${departure.arrivalTime}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(departure);
-  }
-
-  return { departures: unique, failedBoards };
-}
-
-function renderStopCard(card, stop, arrivals) {
-  const countdownEl = card.querySelector(".time");
-  const metaEl = card.querySelector(".meta");
-  const leaveEl = card.querySelector(".leave-now");
-  const badgeEl = card.querySelector(".status-badge");
-  const upcomingEl = card.querySelector(".upcoming");
-  const upcomingListEl = card.querySelector(".upcoming ul");
-
-  if (arrivals.length === 0) {
+  if (journeys.length === 0) {
     countdownEl.textContent = "няма данни";
-    countdownEl.className = "time none";
+    countdownEl.className = "route-time none";
+    etaEl.textContent = "—";
+    breakdownEl.innerHTML = "";
+    busWaitEl.textContent = "";
     leaveEl.textContent = "";
     leaveEl.className = "leave-now";
     badgeEl.textContent = "—";
     badgeEl.className = "status-badge status-scheduled";
-    metaEl.textContent = `Няма курсове на линия ${CONFIG.lineNumber} в посока ${stop.directionLabel}.`;
+    confidenceBadgeEl.textContent = "—";
+    confidenceHintEl.textContent = "";
+    historyEl.hidden = true;
     upcomingEl.hidden = true;
     return;
   }
 
-  const now = Date.now();
-  const next = arrivals[0];
-  const diff = next.arrivalTime - now;
-  const destination = next.destination?.bg ?? next.destination?.en ?? "неизвестна посока";
+  const next = journeys[0];
+  const walkingMinutes = settings.walkingMinutes[boardingStop.id] ?? 4;
+  const breakdown = getJourneyBreakdown(next, walkingMinutes, now);
+  const leave = getLeaveMessageForJourney(next.arrivalTime, walkingMinutes, now);
   const badge = getStatusBadge(next);
-  const walkingMinutes = settings.walkingMinutes[stop.id] ?? 4;
-  const leave = getLeaveMessage(next.arrivalTime, walkingMinutes);
+  const confidence = next.confidence ?? getConfidence(next);
+  const totalDiff = next.destinationArrival - now;
+  const busDiff = next.arrivalTime - now;
 
-  countdownEl.textContent = formatMinutes(diff);
-  countdownEl.className = diff <= 3 * 60_000 ? "time soon" : "time";
+  countdownEl.textContent = formatMinutes(totalDiff);
+  countdownEl.className = totalDiff <= 5 * 60_000 ? "route-time soon" : "route-time";
 
+  etaEl.textContent = `🏁 Стигаш в ${destinationStop.shortName} около ${formatClock(breakdown.destinationArrival)}`;
+
+  const rideLabel = breakdown.rideEstimated ? `~${breakdown.rideMinutes} мин` : `${breakdown.rideMinutes} мин`;
+  breakdownEl.innerHTML = `
+    <span class="breakdown-item">🚶 ${breakdown.walkMinutes} мин</span>
+    <span class="breakdown-sep">+</span>
+    <span class="breakdown-item">⏳ ${breakdown.waitMinutes} мин</span>
+    <span class="breakdown-sep">+</span>
+    <span class="breakdown-item">🚌 ${rideLabel}</span>
+  `;
+
+  busWaitEl.textContent = `Автобус на спирката след ${formatMinutes(busDiff)}`;
   leaveEl.textContent = leave.text;
   leaveEl.className = leave.className;
-
   badgeEl.textContent = badge.text;
   badgeEl.className = `status-badge ${badge.className}`;
+  confidenceBadgeEl.textContent = confidence.label;
+  confidenceBadgeEl.className = `confidence-badge ${confidence.className}`;
+  confidenceHintEl.textContent = confidence.hint;
 
-  const liveLabel = next.isLive ? "на път" : "по разписание";
+  const typical = getTypicalDelay(boardingStop.id);
+  const typicalText = formatTypicalDelay(typical);
+  if (typicalText) {
+    historyEl.textContent = `📊 ${typicalText}`;
+    historyEl.hidden = false;
+  } else {
+    historyEl.hidden = true;
+  }
+
   const staleLabel = isStale && lastUpdatedAt ? ` · кеш от ${formatClock(lastUpdatedAt)}` : "";
-  metaEl.textContent = `${liveLabel} · към ${destination} · около ${formatClock(next.arrivalTime)}${staleLabel}`;
+  routeCardEl.querySelector(".route-meta").textContent =
+    `Общо ~${breakdown.totalMinutes} мин${breakdown.rideEstimated ? " · времето в автобуса е оценка" : ""}${staleLabel}`;
 
-  const rest = arrivals.slice(1, 4);
+  const rest = journeys.slice(1, 4);
   if (rest.length === 0) {
     upcomingEl.hidden = true;
     return;
@@ -383,57 +407,50 @@ function renderStopCard(card, stop, arrivals) {
 
   upcomingEl.hidden = false;
   upcomingListEl.innerHTML = rest
-    .map((departure) => {
-      const mins = formatMinutes(departure.arrivalTime - now);
-      const dest = departure.destination?.bg ?? departure.destination?.en ?? "";
-      const itemBadge = getStatusBadge(departure);
-      return `<li><span>${mins}</span><span class="upcoming-dest">${dest}</span><span class="upcoming-badge ${itemBadge.className}">${itemBadge.text}</span></li>`;
+    .map((journey) => {
+      const itemBreakdown = getJourneyBreakdown(journey, walkingMinutes, now);
+      const itemBadge = getStatusBadge(journey);
+      return `<li>
+        <span>${formatClock(itemBreakdown.destinationArrival)}</span>
+        <span class="upcoming-dest">автобус ${formatClock(journey.arrivalTime)}</span>
+        <span class="upcoming-badge ${itemBadge.className}">${itemBadge.text}</span>
+      </li>`;
     })
     .join("");
 }
 
 function renderWidget() {
-  const items = CONFIG.stops
-    .map((stop) => {
-      const arrivals = cachedArrivals.get(stop.id) ?? [];
-      if (arrivals.length === 0) return null;
+  const route = getActiveRoute();
+  const journeys = cachedJourneys.get(route.id) ?? [];
 
-      const diff = arrivals[0].arrivalTime - Date.now();
-      return `
-        <div class="widget-item widget-item--${stop.id}">
-          <span class="widget-stop">${STOP_EMOJI[stop.id] ?? "🚏"} ${stop.shortName}</span>
-          <span class="widget-time ${diff <= 3 * 60_000 ? "soon" : ""}">${formatMinutes(diff)}</span>
-        </div>
-      `;
-    })
-    .filter(Boolean)
-    .join("");
-
-  if (!items) {
-    widgetEl.hidden = true;
+  if (journeys.length === 0) {
+    widgetEl.innerHTML = `<div class="widget-empty">Няма данни</div>`;
     return;
   }
 
-  widgetEl.hidden = false;
-  widgetEl.innerHTML = items;
+  const diff = journeys[0].destinationArrival - Date.now();
+  const boardingStop = STOP_BY_ID[route.boardingStopId];
+  const destinationStop = STOP_BY_ID[route.destinationStopId];
+
+  widgetEl.innerHTML = `
+    <div class="widget-item widget-item--route">
+      <span class="widget-stop">${route.emoji} ${boardingStop.shortName} → ${destinationStop.shortName}</span>
+      <span class="widget-time ${diff <= 5 * 60_000 ? "soon" : ""}">${formatMinutes(diff)}</span>
+    </div>
+  `;
 }
 
 function renderAll() {
-  for (const stop of CONFIG.stops) {
-    const card = document.querySelector(`[data-stop-id="${stop.id}"]`);
-    const arrivals = cachedArrivals.get(stop.id) ?? [];
-    if (card) renderStopCard(card, stop, arrivals);
-  }
+  updateRouteSwitch();
+  renderRouteCard();
   renderWidget();
+  syncServiceWorkerState();
 }
 
 function applyCachedData(cache) {
-  if (!cache?.arrivals) return false;
+  if (!cache?.journeys) return false;
 
-  for (const stop of CONFIG.stops) {
-    cachedArrivals.set(stop.id, cache.arrivals[stop.id] ?? []);
-  }
-
+  cachedJourneys = new Map(Object.entries(cache.journeys));
   lastUpdatedAt = cache.savedAt;
   isStale = true;
   renderAll();
@@ -441,95 +458,130 @@ function applyCachedData(cache) {
   return true;
 }
 
+function syncServiceWorkerState() {
+  if (!navigator.serviceWorker?.controller) return;
+
+  const route = getActiveRoute();
+  const boardingStop = STOP_BY_ID[route.boardingStopId];
+  const next = (cachedJourneys.get(route.id) ?? [])[0] ?? null;
+
+  navigator.serviceWorker.controller.postMessage({
+    type: "SYNC_STATE",
+    settings,
+    stops: [
+      {
+        id: boardingStop.id,
+        name: boardingStop.name,
+        next,
+      },
+    ],
+    notifiedState,
+    updatedAt: lastUpdatedAt,
+  });
+}
+
 async function maybeNotify() {
   if (!settings.notificationsEnabled || Notification.permission !== "granted") return;
 
-  const payload = CONFIG.stops.map((stop) => ({
-    stop,
-    next: (cachedArrivals.get(stop.id) ?? [])[0] ?? null,
-  }));
+  const route = getActiveRoute();
+  const boardingStop = STOP_BY_ID[route.boardingStopId];
+  const next = (cachedJourneys.get(route.id) ?? [])[0] ?? null;
+  if (!next) return;
 
-  const activeTripKeys = payload
-    .filter((item) => item.next)
-    .map((item) => `${item.stop.id}-${item.next.tripId}`);
+  const tripKey = `${route.id}-${next.tripId}`;
+  const activeTripKeys = [tripKey];
 
   notifiedState = pruneNotifiedState(notifiedState, activeTripKeys);
-  saveNotifiedState(notifiedState);
+  if (!notifiedState[tripKey]) {
+    notifiedState[tripKey] = { ten: false, five: false };
+  }
 
-  for (const item of payload) {
-    const { stop, next } = item;
-    if (!next) continue;
+  const minutesUntil = Math.round((next.arrivalTime - Date.now()) / 60_000);
+  const state = notifiedState[tripKey];
 
-    const tripKey = `${stop.id}-${next.tripId}`;
-    if (!notifiedState[tripKey]) {
-      notifiedState[tripKey] = { ten: false, five: false };
-    }
+  for (const threshold of settings.alertMinutes) {
+    const key = threshold === 10 ? "ten" : "five";
+    if (minutesUntil <= threshold && minutesUntil > 0 && !state[key]) {
+      state[key] = true;
+      const title = `Автобус 73 · ${route.label}`;
+      const body = `На ${boardingStop.shortName} след ~${minutesUntil} мин (${formatClock(next.arrivalTime)})`;
 
-    const minutesUntil = Math.round((next.arrivalTime - Date.now()) / 60_000);
-    const state = notifiedState[tripKey];
-
-    for (const threshold of settings.alertMinutes) {
-      const key = threshold === 10 ? "ten" : "five";
-      if (minutesUntil <= threshold && minutesUntil > 0 && !state[key]) {
-        state[key] = true;
-        const title = `Автобус 73 · ${stop.name}`;
-        const body = `Пристига след ~${minutesUntil} мин (${formatClock(next.arrivalTime)})`;
-
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: "SHOW_NOTIFICATION",
+          title,
+          body,
+          tag: tripKey,
+        });
+      } else {
         new Notification(title, { body, icon: "/icon.svg", tag: tripKey });
       }
     }
   }
 
   saveNotifiedState(notifiedState);
+  syncServiceWorkerState();
 }
 
 async function refresh() {
   try {
-    const results = await Promise.all(
-      CONFIG.stops.map(async (stop) => {
-        const { departures, failedBoards } = await fetchArrivalsForStop(stop);
-        cachedArrivals.set(stop.id, departures);
-        return { departures, failedBoards };
-      }),
-    );
+    const { cache, failedBoards, total } = await fetchAllBoards();
+    cachedJourneys = buildJourneyData(cache);
 
-    const allFailed = results.every((result) => result.failedBoards > 0 && result.departures.length === 0);
-    if (allFailed) {
+    const activeJourneys = cachedJourneys.get(settings.routeId) ?? [];
+    const allEmpty = [...cachedJourneys.values()].every((journeys) => journeys.length === 0);
+
+    if (failedBoards === total) {
       throw new Error("Неуспешна връзка с API. Опитайте отново след малко.");
     }
 
-    if (results.every((result) => result.departures.length === 0)) {
+    if (allEmpty) {
       throw new Error("Няма активни курсове в момента (възможно е извън работно време).");
     }
 
-    isStale = false;
+    if (activeJourneys.length === 0 && failedBoards > 0) {
+      throw new Error("Няма данни за избрания маршрут в момента.");
+    }
+
+    if (dataSource !== "kv-stale" && dataSource !== "gtfs-rt") {
+      isStale = false;
+    }
     lastUpdatedAt = Date.now();
 
-    const cachePayload = Object.fromEntries(
-      CONFIG.stops.map((stop) => [stop.id, cachedArrivals.get(stop.id)]),
-    );
-    saveCache(cachePayload);
+    saveCache({
+      journeys: Object.fromEntries(cachedJourneys),
+    });
 
     renderAll();
-    statusEl.textContent = `Последно обновяване: ${formatClock(lastUpdatedAt)}`;
+    const staleNote = isStale ? " (кеш)" : "";
+    statusEl.textContent = `Последно обновяване: ${formatClock(lastUpdatedAt)}${staleNote}`;
     await maybeNotify();
   } catch (error) {
+    reportError(error);
+
     const cache = loadCache();
     if (applyCachedData(cache)) return;
 
-    for (const stop of CONFIG.stops) {
-      const card = document.querySelector(`[data-stop-id="${stop.id}"]`);
-      if (!card) continue;
-
-      card.querySelector(".time").textContent = "грешка";
-      card.querySelector(".time").className = "time none";
-      card.querySelector(".leave-now").textContent = "";
-      card.querySelector(".meta").textContent = "Неуспешно зареждане.";
-      card.querySelector(".upcoming").hidden = true;
-    }
-
+    routeCardEl.querySelector(".route-time").textContent = "грешка";
+    routeCardEl.querySelector(".route-time").className = "route-time none";
+    routeCardEl.querySelector(".route-eta").textContent = "Неуспешно зареждане";
+    routeCardEl.querySelector(".route-breakdown").innerHTML = "";
+    routeCardEl.querySelector(".leave-now").textContent = "";
+    routeCardEl.querySelector(".upcoming").hidden = true;
     statusEl.textContent = error.message;
   }
+}
+
+function bindRouteSwitch() {
+  routeSwitchEl.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-route-id]");
+    if (!button) return;
+
+    settings.routeId = button.dataset.routeId;
+    saveSettings(settings);
+    renderAll();
+    refreshWeather();
+  });
 }
 
 function bindSettings() {
@@ -537,10 +589,13 @@ function bindSettings() {
   const walkBulgaria = document.getElementById("walk-bulgaria");
   const notificationsEnabled = document.getElementById("notifications-enabled");
   const enableNotifications = document.getElementById("enable-notifications");
+  const themeSelect = document.getElementById("theme-select");
 
   walkTokuda.value = settings.walkingMinutes.tokuda;
   walkBulgaria.value = settings.walkingMinutes.bulgaria;
   notificationsEnabled.checked = settings.notificationsEnabled;
+  themeSelect.value = settings.theme;
+  applyTheme(settings.theme);
 
   settingsToggle.addEventListener("click", () => {
     const open = settingsPanel.hidden;
@@ -560,9 +615,16 @@ function bindSettings() {
     renderAll();
   });
 
+  themeSelect.addEventListener("change", () => {
+    settings.theme = themeSelect.value;
+    saveSettings(settings);
+    applyTheme(settings.theme);
+  });
+
   notificationsEnabled.addEventListener("change", async () => {
     settings.notificationsEnabled = notificationsEnabled.checked;
     saveSettings(settings);
+    syncServiceWorkerState();
 
     if (settings.notificationsEnabled && Notification.permission === "default") {
       await Notification.requestPermission();
@@ -575,8 +637,53 @@ function bindSettings() {
       settings.notificationsEnabled = true;
       notificationsEnabled.checked = true;
       saveSettings(settings);
+      syncServiceWorkerState();
     }
   });
+}
+
+function bindPullToRefresh() {
+  let startY = 0;
+  let pulling = false;
+
+  document.addEventListener(
+    "touchstart",
+    (event) => {
+      if (window.scrollY > 0) return;
+      startY = event.touches[0].clientY;
+      pulling = true;
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!pulling || window.scrollY > 0) return;
+      const delta = event.touches[0].clientY - startY;
+      if (delta > 0 && delta < 120 && pullIndicator) {
+        pullIndicator.hidden = false;
+        pullIndicator.textContent = delta > 70 ? "Пусни за обновяване" : "Дръпни за обновяване";
+      }
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchend",
+    async (event) => {
+      if (!pulling) return;
+      pulling = false;
+      const delta = event.changedTouches[0].clientY - startY;
+      if (pullIndicator) pullIndicator.hidden = true;
+      if (delta > 70 && window.scrollY <= 0) {
+        statusEl.textContent = "Обновяване...";
+        await refresh();
+        await refreshWeather();
+      }
+    },
+    { passive: true },
+  );
 }
 
 function isInstalledPwa() {
@@ -661,6 +768,13 @@ async function registerServiceWorker() {
         }
       });
     });
+
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "NOTIFIED_STATE") {
+        notifiedState = { ...notifiedState, ...event.data.state };
+        saveNotifiedState(notifiedState);
+      }
+    });
   } catch {
     // PWA extras are optional if SW registration fails locally.
   }
@@ -674,12 +788,46 @@ function migrateAppVersion() {
   localStorage.setItem("bus73-version", APP_VERSION);
 }
 
-for (const stop of CONFIG.stops) {
-  createStopCard(stop);
+function reportError(error) {
+  if (window.Sentry?.captureException) {
+    window.Sentry.captureException(error);
+  }
 }
 
+async function initMonitoring() {
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) return;
+
+    const { sentryDsn } = await response.json();
+    if (!sentryDsn) return;
+
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://browser.sentry-cdn.com/9.40.0/bundle.min.js";
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+
+    window.Sentry.init({
+      dsn: sentryDsn,
+      environment: location.hostname,
+      tracesSampleRate: 0.1,
+    });
+  } catch {
+    // Monitoring is optional.
+  }
+}
+
+ensureProductionUrl();
+initMonitoring();
+
+bindRouteSwitch();
 bindSettings();
 bindInstallPrompt();
+bindPullToRefresh();
 migrateAppVersion();
 registerServiceWorker();
 
@@ -696,3 +844,6 @@ setInterval(() => {
   renderAll();
   maybeNotify();
 }, 1000);
+
+window.addEventListener("error", (event) => reportError(event.error ?? new Error(event.message)));
+window.addEventListener("unhandledrejection", (event) => reportError(event.reason));

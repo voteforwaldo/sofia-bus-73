@@ -1,5 +1,7 @@
-const memoryCache = new Map();
-const CACHE_MS = 20 * 60 * 1000;
+import { cacheGet, cacheSet } from "../lib/server-cache.js";
+
+const CACHE_SECONDS = 20 * 60;
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 const RAIN_CODES = new Set([
   51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
@@ -72,7 +74,7 @@ ${JSON.stringify(analysis, null, 2)}
 Пиши само текста, без markdown и без списъци.`;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -108,11 +110,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  const cacheKey = `${stopId}:${lat}:${lon}`;
-  const cached = memoryCache.get(cacheKey);
-  if (cached && Date.now() - cached.savedAt < CACHE_MS) {
+  const cacheKey = `weather:${stopId}:${lat}:${lon}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
     res.setHeader("Cache-Control", "public, max-age=600");
-    res.status(200).json(cached.payload);
+    res.status(200).json(cached);
     return;
   }
 
@@ -130,7 +132,7 @@ export default async function handler(req, res) {
       source: process.env.GEMINI_API_KEY ? "gemini+open-meteo" : "open-meteo",
     };
 
-    memoryCache.set(cacheKey, { savedAt: Date.now(), payload });
+    await cacheSet(cacheKey, payload, CACHE_SECONDS);
 
     res.setHeader("Cache-Control", "public, max-age=600");
     res.status(200).json(payload);

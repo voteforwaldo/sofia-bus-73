@@ -15,14 +15,15 @@
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800;900&display=swap" rel="stylesheet">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <link rel="stylesheet" href="/styles.css?v=6">
+  <link rel="stylesheet" href="/styles.css?v=8">
 </head>
 <body>
+  <div id="pull-indicator" class="pull-indicator" hidden>Дръпни за обновяване</div>
   <div class="page">
     <header class="page-header">
       <div class="header-top">
         <div>
-          <p class="eyebrow">🌇 София · livetransport.eu</p>
+          <p class="eyebrow">🌇 София · маршрут 73</p>
           <h1>Автобус <span class="line-badge">🚌 73</span></h1>
         </div>
         <div class="header-actions">
@@ -33,7 +34,12 @@
         </div>
       </div>
 
-      <div id="widget" class="widget" hidden></div>
+      <div id="route-switch" class="route-switch" role="tablist" aria-label="Избери маршрут">
+        <button type="button" class="route-switch-btn" data-route-id="to-tokuda" role="tab">🏥 Към Токуда</button>
+        <button type="button" class="route-switch-btn" data-route-id="to-bulgaria" role="tab">🌇 Към България</button>
+      </div>
+
+      <div id="widget" class="widget widget--compact" aria-label="Бърз преглед"></div>
       <div id="install-banner" class="install-banner" hidden>
         <p>📲 Инсталирай приложението на началния екран за бърз достъп.</p>
         <button id="install-button" class="button" type="button">Инсталирай</button>
@@ -59,12 +65,58 @@
         <span>Известия преди пристигане</span>
       </label>
 
+      <label class="field">
+        <span>Тема</span>
+        <select id="theme-select">
+          <option value="auto">Автоматично</option>
+          <option value="light">Светла</option>
+          <option value="dark">Тъмна</option>
+        </select>
+      </label>
+
       <p class="settings-hint">Известията работят най-добре с инсталирано PWA. Ще получиш сигнал на 10 и 5 минути преди автобуса.</p>
 
       <button id="enable-notifications" class="button" type="button">Разреши известия</button>
     </section>
 
-    <div id="stops" class="stops"></div>
+    <section id="route-card" class="route-card" aria-live="polite">
+      <div class="route-header">
+        <div>
+          <h2 class="route-title">—</h2>
+          <p class="route-boarding">—</p>
+        </div>
+        <span class="status-badge status-scheduled">—</span>
+      </div>
+
+      <div class="confidence">
+        <span class="confidence-badge confidence-low">—</span>
+        <span class="confidence-hint"></span>
+      </div>
+      <p class="delay-history" hidden></p>
+
+      <div class="weather">
+        <div class="weather-header">
+          <span class="weather-title">🌤️ Време на спирката</span>
+          <span class="weather-rain">—</span>
+        </div>
+        <p class="weather-text">Зареждане на прогноза...</p>
+      </div>
+
+      <div class="route-arrival">
+        <p class="label">🏁 Стигаш след</p>
+        <p class="route-time">—</p>
+        <p class="route-eta">—</p>
+        <p class="route-breakdown"></p>
+        <p class="route-bus-wait"></p>
+        <p class="leave-now">—</p>
+        <p class="route-meta">Зареждане...</p>
+      </div>
+
+      <div class="upcoming" hidden>
+        <h3>🗓️ Следващи курсове</h3>
+        <ul></ul>
+      </div>
+    </section>
 
     <footer>
       <p id="status">Обновяване...</p>
@@ -72,6 +124,6 @@
     </footer>
   </div>
 
-  <script src="/app.js?v=6" type="module"></script>
+  <script src="/app.js?v=8" type="module"></script>
 </body>
 </html>
