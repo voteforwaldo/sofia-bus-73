@@ -171,7 +171,15 @@ async function fetchBoard(stopId) {
   if (!response.ok) {
     throw new Error(`API грешка ${response.status} за спирка ${stopId}`);
   }
-  const data = await response.json();
+
+  const raw = await response.text();
+  if (!raw.trim().startsWith("{")) {
+    throw new Error(
+      "Сървърът върна невалиден отговор. Използвай production линка: sofia-bus-73.vercel.app",
+    );
+  }
+
+  const data = JSON.parse(raw);
   return data.departures ?? [];
 }
 
