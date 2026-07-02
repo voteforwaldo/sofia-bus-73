@@ -325,10 +325,9 @@ function renderRouteCard() {
   routeCardEl.querySelector(".route-boarding").textContent =
     `Качваш се: ${boardingStop.name} · посока ${route.directionLabel}`;
 
-  const countdownEl = routeCardEl.querySelector(".route-time");
-  const etaEl = routeCardEl.querySelector(".route-eta");
+  const busTimeEl = routeCardEl.querySelector(".route-bus-time");
+  const destinationEl = routeCardEl.querySelector(".route-destination");
   const breakdownEl = routeCardEl.querySelector(".route-breakdown");
-  const busWaitEl = routeCardEl.querySelector(".route-bus-wait");
   const leaveEl = routeCardEl.querySelector(".leave-now");
   const badgeEl = routeCardEl.querySelector(".status-badge");
   const confidenceBadgeEl = routeCardEl.querySelector(".confidence-badge");
@@ -338,11 +337,10 @@ function renderRouteCard() {
   const upcomingListEl = routeCardEl.querySelector(".upcoming ul");
 
   if (journeys.length === 0) {
-    countdownEl.textContent = "няма данни";
-    countdownEl.className = "route-time none";
-    etaEl.textContent = "—";
+    busTimeEl.textContent = "няма данни";
+    busTimeEl.className = "route-bus-time none";
+    destinationEl.textContent = "—";
     breakdownEl.innerHTML = "";
-    busWaitEl.textContent = "";
     leaveEl.textContent = "";
     leaveEl.className = "leave-now";
     badgeEl.textContent = "—";
@@ -363,10 +361,11 @@ function renderRouteCard() {
   const totalDiff = next.destinationArrival - now;
   const busDiff = next.arrivalTime - now;
 
-  countdownEl.textContent = formatMinutes(totalDiff);
-  countdownEl.className = totalDiff <= 5 * 60_000 ? "route-time soon" : "route-time";
+  busTimeEl.textContent = formatMinutes(busDiff);
+  busTimeEl.className = busDiff <= 3 * 60_000 ? "route-bus-time soon" : "route-bus-time";
 
-  etaEl.textContent = `🏁 Стигаш в ${destinationStop.shortName} около ${formatClock(breakdown.destinationArrival)}`;
+  destinationEl.textContent =
+    `🏁 До ${destinationStop.shortName}: ${formatMinutes(totalDiff)} · около ${formatClock(breakdown.destinationArrival)}`;
 
   const rideLabel = breakdown.rideEstimated ? `~${breakdown.rideMinutes} мин` : `${breakdown.rideMinutes} мин`;
   breakdownEl.innerHTML = `
@@ -377,7 +376,6 @@ function renderRouteCard() {
     <span class="breakdown-item">🚌 ${rideLabel}</span>
   `;
 
-  busWaitEl.textContent = `Автобус на спирката след ${formatMinutes(busDiff)}`;
   leaveEl.textContent = leave.text;
   leaveEl.className = leave.className;
   badgeEl.textContent = badge.text;
@@ -428,14 +426,14 @@ function renderWidget() {
     return;
   }
 
-  const diff = journeys[0].destinationArrival - Date.now();
+  const diff = journeys[0].arrivalTime - Date.now();
   const boardingStop = STOP_BY_ID[route.boardingStopId];
   const destinationStop = STOP_BY_ID[route.destinationStopId];
 
   widgetEl.innerHTML = `
     <div class="widget-item widget-item--route">
       <span class="widget-stop">${route.emoji} ${boardingStop.shortName} → ${destinationStop.shortName}</span>
-      <span class="widget-time ${diff <= 5 * 60_000 ? "soon" : ""}">${formatMinutes(diff)}</span>
+      <span class="widget-time ${diff <= 3 * 60_000 ? "soon" : ""}">${formatMinutes(diff)}</span>
     </div>
   `;
 }
@@ -562,9 +560,9 @@ async function refresh() {
     const cache = loadCache();
     if (applyCachedData(cache)) return;
 
-    routeCardEl.querySelector(".route-time").textContent = "грешка";
-    routeCardEl.querySelector(".route-time").className = "route-time none";
-    routeCardEl.querySelector(".route-eta").textContent = "Неуспешно зареждане";
+    routeCardEl.querySelector(".route-bus-time").textContent = "грешка";
+    routeCardEl.querySelector(".route-bus-time").className = "route-bus-time none";
+    routeCardEl.querySelector(".route-destination").textContent = "Неуспешно зареждане";
     routeCardEl.querySelector(".route-breakdown").innerHTML = "";
     routeCardEl.querySelector(".leave-now").textContent = "";
     routeCardEl.querySelector(".upcoming").hidden = true;
