@@ -865,7 +865,7 @@ footer {
 @media (prefers-color-scheme: dark) {
   .widget-item--tokuda,
   .widget-item--bulgaria,
-  .upcoming li,
+  .upcoming-item,
   .icon-button,
   .button.ghost,
   .field input {
