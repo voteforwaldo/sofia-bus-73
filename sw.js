@@ -1,10 +1,11 @@
-const CACHE_NAME = "bus73-v11";
+const CACHE_NAME = "bus73-v12";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
   "/styles.css",
   "/app.js",
   "/settings.js",
+  "/lib/version.js",
   "/lib/transit.js",
   "/lib/routes.js",
   "/lib/delay-history.js",

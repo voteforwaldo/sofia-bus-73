@@ -6,19 +6,19 @@ import {
   saveCache,
   saveNotifiedState,
   saveSettings,
-} from "./settings.js";
+} from "./settings.js?v=12";
 import {
   dedupeDepartures,
   filterLine73Departures,
   getConfidence,
   getStatusBadge,
   parseBoardResponse,
-} from "./lib/transit.js";
+} from "./lib/transit.js?v=12";
 import {
   formatTypicalDelay,
   getTypicalDelay,
   recordDelay,
-} from "./lib/delay-history.js";
+} from "./lib/delay-history.js?v=12";
 import {
   buildJourneysForRoute,
   buildTripIndex,
@@ -26,11 +26,12 @@ import {
   getLeaveMessageForJourney,
   getRoute,
   ROUTES,
-} from "./lib/routes.js";
-import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js";
+} from "./lib/routes.js?v=12";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=12";
+import { BUILD_VERSION } from "./lib/version.js?v=12";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
-const APP_VERSION = "11";
+const APP_VERSION = BUILD_VERSION;
 
 const CONFIG = {
   apiBase: "https://api.livetransport.eu/sofia",
@@ -809,6 +810,12 @@ function migrateAppVersion() {
 
   localStorage.removeItem("bus73-cache");
   localStorage.setItem("bus73-version", APP_VERSION);
+
+  if ("caches" in window) {
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((key) => key.startsWith("bus73-")).map((key) => caches.delete(key))),
+    );
+  }
 }
 
 function reportError(error) {
