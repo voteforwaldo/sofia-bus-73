@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=3">
 </head>
 <body>
   <div class="page">
@@ -22,9 +22,12 @@
           <p class="eyebrow">София · livetransport.eu</p>
           <h1>Автобус <span class="line-badge">73</span></h1>
         </div>
-        <button id="settings-toggle" class="icon-button" type="button" aria-expanded="false" aria-controls="settings-panel">
-          ⚙
-        </button>
+        <div class="header-actions">
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Обнови">↻</button>
+          <button id="settings-toggle" class="icon-button" type="button" aria-expanded="false" aria-controls="settings-panel">
+            ⚙
+          </button>
+        </div>
       </div>
 
       <div id="widget" class="widget" hidden></div>
@@ -66,6 +69,6 @@
     </footer>
   </div>
 
-  <script src="/app.js" type="module"></script>
+  <script src="/app.js?v=3" type="module"></script>
 </body>
 </html>

@@ -50,6 +50,7 @@ const settingsToggle = document.getElementById("settings-toggle");
 const installBanner = document.getElementById("install-banner");
 const installButton = document.getElementById("install-button");
 const installDismiss = document.getElementById("install-dismiss");
+const refreshButton = document.getElementById("refresh-button");
 
 let settings = loadSettings();
 let cachedArrivals = new Map();
@@ -151,6 +152,8 @@ function createStopCard(stop) {
   stopsRoot.appendChild(card);
   return card;
 }
+
+const APP_VERSION = "3";
 
 function getBoardUrl(stopId) {
   const isLocal =
@@ -466,16 +469,38 @@ function bindInstallPrompt() {
     installBanner.hidden = true;
     localStorage.setItem("bus73-install-dismissed", "1");
   });
+
+  refreshButton?.addEventListener("click", () => {
+    statusEl.textContent = "Обновяване...";
+    refresh();
+  });
 }
 
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
 
   try {
-    await navigator.serviceWorker.register("/sw.js");
+    const registration = await navigator.serviceWorker.register("/sw.js");
+
+    registration.addEventListener("updatefound", () => {
+      const worker = registration.installing;
+      worker?.addEventListener("statechange", () => {
+        if (worker.state === "activated" && navigator.serviceWorker.controller) {
+          location.reload();
+        }
+      });
+    });
   } catch {
     // PWA extras are optional if SW registration fails locally.
   }
+}
+
+function migrateAppVersion() {
+  const previous = localStorage.getItem("bus73-version");
+  if (previous === APP_VERSION) return;
+
+  localStorage.removeItem("bus73-cache");
+  localStorage.setItem("bus73-version", APP_VERSION);
 }
 
 for (const stop of CONFIG.stops) {
@@ -484,6 +509,7 @@ for (const stop of CONFIG.stops) {
 
 bindSettings();
 bindInstallPrompt();
+migrateAppVersion();
 registerServiceWorker();
 
 const initialCache = loadCache();
