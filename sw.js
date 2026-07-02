@@ -1,7 +1,14 @@
-const CACHE_NAME = "bus73-v8";
+const CACHE_NAME = "bus73-v11";
 const STATIC_ASSETS = [
+  "/",
   "/index.html",
   "/styles.css",
+  "/app.js",
+  "/settings.js",
+  "/lib/transit.js",
+  "/lib/routes.js",
+  "/lib/delay-history.js",
+  "/lib/weather.js",
   "/manifest.json",
   "/icon.svg",
 ];
@@ -45,14 +52,18 @@ self.addEventListener("message", (event) => {
   }
 });
 
-function showNotification(title, body, tag) {
-  self.registration.showNotification(title, {
-    body,
-    icon: "/icon.svg",
-    badge: "/icon.svg",
-    tag,
-    renotify: true,
-  });
+async function showNotification(title, body, tag) {
+  try {
+    await self.registration.showNotification(title, {
+      body,
+      icon: "/icon.svg",
+      badge: "/icon.svg",
+      tag,
+      renotify: true,
+    });
+  } catch {
+    // Permission revoked or unsupported in this context.
+  }
 }
 
 function formatClock(timestamp) {
@@ -63,6 +74,10 @@ function formatClock(timestamp) {
   }).format(new Date(timestamp));
 }
 
+function notificationKey(threshold) {
+  return String(threshold);
+}
+
 async function checkBackgroundNotifications() {
   if (!swState.settings.notificationsEnabled) return;
 
@@ -70,20 +85,20 @@ async function checkBackgroundNotifications() {
     const next = stop.next;
     if (!next?.arrivalTime) continue;
 
-    const tripKey = `${stop.id}-${next.tripId}`;
+    const tripKey = `${stop.routeId ?? stop.id}-${next.tripId}`;
     if (!swState.notifiedState[tripKey]) {
-      swState.notifiedState[tripKey] = { ten: false, five: false };
+      swState.notifiedState[tripKey] = {};
     }
 
     const minutesUntil = Math.round((next.arrivalTime - Date.now()) / 60_000);
     const state = swState.notifiedState[tripKey];
 
     for (const threshold of swState.settings.alertMinutes ?? [10, 5]) {
-      const key = threshold === 10 ? "ten" : "five";
+      const key = notificationKey(threshold);
       if (minutesUntil <= threshold && minutesUntil > 0 && !state[key]) {
         state[key] = true;
-        const title = `Автобус 73 · ${stop.name}`;
-        const body = `Пристига след ~${minutesUntil} мин (${formatClock(next.arrivalTime)})`;
+        const title = `Автобус 73 · ${stop.routeLabel ?? stop.name}`;
+        const body = `На ${stop.name} след ~${minutesUntil} мин (${formatClock(next.arrivalTime)})`;
         await showNotification(title, body, tripKey);
       }
     }

@@ -27,9 +27,10 @@ import {
   getRoute,
   ROUTES,
 } from "./lib/routes.js";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
-const APP_VERSION = "8";
+const APP_VERSION = "11";
 
 const CONFIG = {
   apiBase: "https://api.livetransport.eu/sofia",
@@ -81,6 +82,13 @@ let isStale = false;
 let dataSource = "live";
 let deferredInstallPrompt = null;
 let notifiedState = loadNotifiedState();
+let refreshInFlight = null;
+
+const SOURCE_PRIORITY = {
+  livetransport: 0,
+  "kv-stale": 1,
+  "gtfs-rt": 2,
+};
 
 function getActiveRoute() {
   return getRoute(settings.routeId);
@@ -124,9 +132,9 @@ function formatClock(timestamp) {
   }).format(new Date(timestamp));
 }
 
-const RAIN_CODES = new Set([
-  51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
-]);
+function notificationKey(threshold) {
+  return String(threshold);
+}
 
 function isLocalHost() {
   return location.hostname === "localhost" || location.hostname === "127.0.0.1";
@@ -140,15 +148,6 @@ function getBoardUrl(stopId) {
   return `/api/board?stopId=${encodeURIComponent(stopId)}&limit=${CONFIG.limit}`;
 }
 
-function weatherLabel(code) {
-  if (code === 0) return "ясно";
-  if (code <= 3) return "облачно";
-  if (RAIN_CODES.has(code)) return "дъжд";
-  if (code >= 71 && code <= 77) return "сняг";
-  if (code === 45 || code === 48) return "мъгла";
-  return "променливо";
-}
-
 function buildLocalWeatherSummary(stopName, forecast) {
   const current = forecast.current;
   const hours = forecast.hourly.time.slice(0, 6).map((time, index) => ({
@@ -158,7 +157,8 @@ function buildLocalWeatherSummary(stopName, forecast) {
   }));
 
   const willRainSoon = hours.some(
-    (hour) => hour.precipitation > 0.1 || hour.probability >= 45 || RAIN_CODES.has(hour.code),
+    (hour) =>
+      hour.precipitation > 0.1 || hour.probability >= 45 || PRECIPITATION_CODES.has(hour.code),
   );
 
   const temp = Math.round(current.temperature_2m);
@@ -213,9 +213,6 @@ async function fetchBoard(stopId) {
     throw new Error(`API грешка ${response.status} за спирка ${stopId}`);
   }
 
-  const source = response.headers.get("X-Data-Source");
-  if (source) dataSource = source;
-
   const raw = await response.text();
   if (!raw.trim().startsWith("{")) {
     throw new Error(
@@ -223,10 +220,11 @@ async function fetchBoard(stopId) {
     );
   }
 
-  const staleHeader = response.headers.get("X-Data-Stale") === "true";
-  if (staleHeader) isStale = true;
-
-  return parseBoardResponse(raw);
+  return {
+    departures: parseBoardResponse(raw),
+    source: response.headers.get("X-Data-Source") ?? "livetransport",
+    stale: response.headers.get("X-Data-Stale") === "true",
+  };
 }
 
 async function fetchAllBoards() {
@@ -234,19 +232,26 @@ async function fetchAllBoards() {
   const results = await Promise.allSettled(allStopIds.map((stopId) => fetchBoard(stopId)));
   const cache = new Map();
   let failedBoards = 0;
+  let anyStale = false;
+  let dataSource = "livetransport";
 
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {
-      cache.set(allStopIds[index], result.value);
+      const board = result.value;
+      cache.set(allStopIds[index], board.departures);
+      if (board.stale) anyStale = true;
+      if ((SOURCE_PRIORITY[board.source] ?? 0) > (SOURCE_PRIORITY[dataSource] ?? 0)) {
+        dataSource = board.source;
+      }
     } else {
       failedBoards += 1;
     }
   });
 
-  return { cache, failedBoards, total: allStopIds.length };
+  return { cache, failedBoards, total: allStopIds.length, isStale: anyStale, dataSource };
 }
 
-function buildJourneyData(boardCache) {
+function buildJourneyData(boardCache, now = Date.now()) {
   const tripIndex = buildTripIndex(boardCache);
   const journeysByRoute = new Map();
 
@@ -255,7 +260,7 @@ function buildJourneyData(boardCache) {
     const destinationStop = STOP_BY_ID[route.destinationStopId];
     const rawDepartures = boardingStop.stopIds.flatMap((stopId) => boardCache.get(stopId) ?? []);
     const boardingDepartures = dedupeDepartures(
-      filterLine73Departures(rawDepartures, route.matchDirection),
+      filterLine73Departures(rawDepartures, route.matchDirection, now),
     );
 
     for (const departure of boardingDepartures) {
@@ -269,6 +274,7 @@ function buildJourneyData(boardCache) {
       boardingDepartures,
       destinationStop.stopIds,
       tripIndex,
+      now,
     );
     journeysByRoute.set(route.id, journeys);
   }
@@ -469,7 +475,9 @@ function syncServiceWorkerState() {
     stops: [
       {
         id: boardingStop.id,
-        name: boardingStop.name,
+        name: boardingStop.shortName,
+        routeId: route.id,
+        routeLabel: route.label,
         next,
       },
     ],
@@ -491,14 +499,14 @@ async function maybeNotify() {
 
   notifiedState = pruneNotifiedState(notifiedState, activeTripKeys);
   if (!notifiedState[tripKey]) {
-    notifiedState[tripKey] = { ten: false, five: false };
+    notifiedState[tripKey] = {};
   }
 
   const minutesUntil = Math.round((next.arrivalTime - Date.now()) / 60_000);
   const state = notifiedState[tripKey];
 
   for (const threshold of settings.alertMinutes) {
-    const key = threshold === 10 ? "ten" : "five";
+    const key = notificationKey(threshold);
     if (minutesUntil <= threshold && minutesUntil > 0 && !state[key]) {
       state[key] = true;
       const title = `Автобус 73 · ${route.label}`;
@@ -521,9 +529,10 @@ async function maybeNotify() {
   syncServiceWorkerState();
 }
 
-async function refresh() {
+async function refreshInternal() {
   try {
-    const { cache, failedBoards, total } = await fetchAllBoards();
+    const { cache, failedBoards, total, isStale: fetchedStale, dataSource: fetchedSource } =
+      await fetchAllBoards();
     cachedJourneys = buildJourneyData(cache);
 
     const activeJourneys = cachedJourneys.get(settings.routeId) ?? [];
@@ -534,16 +543,15 @@ async function refresh() {
     }
 
     if (allEmpty) {
-      throw new Error("Няма активни курсове в момента (възможно е извън работно време).");
+      const fallbackNote =
+        fetchedSource === "gtfs-rt"
+          ? " API fallback данните не съвпаднаха с маршрута."
+          : "";
+      throw new Error(`Няма активни курсове в момента (възможно е извън работно време).${fallbackNote}`);
     }
 
-    if (activeJourneys.length === 0 && failedBoards > 0) {
-      throw new Error("Няма данни за избрания маршрут в момента.");
-    }
-
-    if (dataSource !== "kv-stale" && dataSource !== "gtfs-rt") {
-      isStale = false;
-    }
+    isStale = fetchedStale;
+    dataSource = fetchedSource;
     lastUpdatedAt = Date.now();
 
     saveCache({
@@ -552,7 +560,9 @@ async function refresh() {
 
     renderAll();
     const staleNote = isStale ? " (кеш)" : "";
-    statusEl.textContent = `Последно обновяване: ${formatClock(lastUpdatedAt)}${staleNote}`;
+    const routeNote =
+      activeJourneys.length === 0 ? ` · няма курсове за ${getActiveRoute().label}` : "";
+    statusEl.textContent = `Последно обновяване: ${formatClock(lastUpdatedAt)}${staleNote}${routeNote}`;
     await maybeNotify();
   } catch (error) {
     reportError(error);
@@ -568,6 +578,14 @@ async function refresh() {
     routeCardEl.querySelector(".upcoming").hidden = true;
     statusEl.textContent = error.message;
   }
+}
+
+function refresh() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = refreshInternal().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
 }
 
 function bindRouteSwitch() {
@@ -734,10 +752,13 @@ function bindInstallPrompt() {
   installButton.addEventListener("click", async () => {
     if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
-    await deferredInstallPrompt.userChoice;
+    const choice = await deferredInstallPrompt.userChoice;
     deferredInstallPrompt = null;
-    localStorage.setItem("bus73-pwa-installed", "1");
-    hideInstallBanner();
+
+    if (choice.outcome === "accepted") {
+      localStorage.setItem("bus73-pwa-installed", "1");
+      hideInstallBanner();
+    }
   });
 
   installDismiss.addEventListener("click", () => {
@@ -745,10 +766,14 @@ function bindInstallPrompt() {
     hideInstallBanner();
   });
 
-  refreshButton?.addEventListener("click", () => {
+  refreshButton?.addEventListener("click", async () => {
     statusEl.textContent = "Обновяване...";
-    refresh();
-    refreshWeather();
+    try {
+      await refresh();
+      await refreshWeather();
+    } catch (error) {
+      reportError(error);
+    }
   });
 }
 

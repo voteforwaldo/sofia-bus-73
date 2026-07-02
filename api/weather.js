@@ -1,20 +1,8 @@
 import { cacheGet, cacheSet } from "../lib/server-cache.js";
+import { PRECIPITATION_CODES, weatherLabel } from "../lib/weather.js";
 
 const CACHE_SECONDS = 20 * 60;
 const GEMINI_MODEL = "gemini-2.5-flash-lite";
-
-const RAIN_CODES = new Set([
-  51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
-]);
-
-function weatherLabel(code) {
-  if (code === 0) return "ясно";
-  if (code <= 3) return "облачно";
-  if (RAIN_CODES.has(code)) return "дъжд";
-  if (code >= 71 && code <= 77) return "сняг";
-  if (code === 45 || code === 48) return "мъгла";
-  return "променливо";
-}
 
 function analyzeForecast(payload) {
   const current = payload.current;
@@ -29,7 +17,7 @@ function analyzeForecast(payload) {
     (hour) =>
       hour.precipitation > 0.1 ||
       hour.probability >= 45 ||
-      RAIN_CODES.has(hour.code),
+      PRECIPITATION_CODES.has(hour.code),
   );
 
   return {
