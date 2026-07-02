@@ -13,6 +13,7 @@ const CONFIG = {
   lineId: "TB39",
   lineNumber: "73",
   refreshMs: 30_000,
+  weatherRefreshMs: 20 * 60_000,
   limit: 40,
   stops: [
     {
@@ -20,6 +21,8 @@ const CONFIG = {
       name: "МБАЛ Токуда",
       shortName: "Токуда",
       directionLabel: "ж.к. Овча купел 2",
+      lat: 42.66716,
+      lon: 23.32672,
       stopIds: ["0205", "0206", "2777"],
       matchDirection: (destination) => {
         const text = `${destination?.bg ?? ""} ${destination?.en ?? ""}`.toLowerCase();
@@ -31,6 +34,8 @@ const CONFIG = {
       name: "бул. България",
       shortName: "България",
       directionLabel: "ж.к. Младост",
+      lat: 42.67262,
+      lon: 23.2937,
       stopIds: ["0290", "0291", "6564", "6275"],
       matchDirection: (destination) => {
         const text = `${destination?.bg ?? ""} ${destination?.en ?? ""}`.toLowerCase();
@@ -54,6 +59,7 @@ const refreshButton = document.getElementById("refresh-button");
 
 let settings = loadSettings();
 let cachedArrivals = new Map();
+let cachedWeather = new Map();
 let lastUpdatedAt = null;
 let isStale = false;
 let deferredInstallPrompt = null;
@@ -138,6 +144,13 @@ function createStopCard(stop) {
       </div>
       <span class="status-badge status-scheduled">—</span>
     </div>
+    <div class="weather" aria-live="polite">
+      <div class="weather-header">
+        <span class="weather-title">Време · Gemini</span>
+        <span class="weather-rain">—</span>
+      </div>
+      <p class="weather-text">Зареждане на прогноза...</p>
+    </div>
     <div class="arrival" aria-live="polite">
       <p class="label">Следващ автобус след</p>
       <p class="time">—</p>
@@ -153,17 +166,122 @@ function createStopCard(stop) {
   return card;
 }
 
-const APP_VERSION = "4";
+const APP_VERSION = "5";
+
+const RAIN_CODES = new Set([
+  51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
+]);
+
+function isLocalHost() {
+  return location.hostname === "localhost" || location.hostname === "127.0.0.1";
+}
 
 function getBoardUrl(stopId) {
-  const isLocal =
-    location.hostname === "localhost" || location.hostname === "127.0.0.1";
-
-  if (isLocal) {
+  if (isLocalHost()) {
     return `${CONFIG.apiBase}/virtual-board/${stopId}?limit=${CONFIG.limit}`;
   }
 
   return `/api/board?stopId=${encodeURIComponent(stopId)}&limit=${CONFIG.limit}`;
+}
+
+function weatherLabel(code) {
+  if (code === 0) return "ясно";
+  if (code <= 3) return "облачно";
+  if (RAIN_CODES.has(code)) return "дъжд";
+  if (code >= 71 && code <= 77) return "сняг";
+  if (code === 45 || code === 48) return "мъгла";
+  return "променливо";
+}
+
+function buildLocalWeatherSummary(stopName, forecast) {
+  const current = forecast.current;
+  const hours = forecast.hourly.time.slice(0, 6).map((time, index) => ({
+    precipitation: forecast.hourly.precipitation[index] ?? 0,
+    probability: forecast.hourly.precipitation_probability[index] ?? 0,
+    code: forecast.hourly.weather_code[index] ?? current.weather_code,
+  }));
+
+  const willRainSoon = hours.some(
+    (hour) => hour.precipitation > 0.1 || hour.probability >= 45 || RAIN_CODES.has(hour.code),
+  );
+
+  const temp = Math.round(current.temperature_2m);
+  const condition = weatherLabel(current.weather_code);
+  const rainText = willRainSoon
+    ? "Да, очаква се дъжд скоро — вземи чадър."
+    : "Не, дъжд скоро не се очаква.";
+
+  return {
+    summary: `При ${stopName} сега е около ${temp}°C и ${condition}. ${rainText}`,
+    willRainSoon,
+    temperature: current.temperature_2m,
+    condition,
+    source: "open-meteo",
+  };
+}
+
+async function fetchLocalWeather(stop) {
+  const params = new URLSearchParams({
+    latitude: stop.lat,
+    longitude: stop.lon,
+    timezone: "Europe/Sofia",
+    current: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
+    hourly: "precipitation_probability,precipitation,weather_code",
+    forecast_hours: "6",
+  });
+
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
+  if (!response.ok) throw new Error("Weather unavailable");
+
+  const forecast = await response.json();
+  return buildLocalWeatherSummary(stop.name, forecast);
+}
+
+async function fetchWeather(stop) {
+  if (!isLocalHost()) {
+    const response = await fetch(
+      `/api/weather?stopId=${encodeURIComponent(stop.id)}&lat=${stop.lat}&lon=${stop.lon}&name=${encodeURIComponent(stop.name)}`,
+    );
+
+    if (response.ok) {
+      return response.json();
+    }
+  }
+
+  return fetchLocalWeather(stop);
+}
+
+function renderWeatherCard(card, weather) {
+  const rainEl = card.querySelector(".weather-rain");
+  const textEl = card.querySelector(".weather-text");
+
+  if (!weather) {
+    rainEl.textContent = "—";
+    rainEl.className = "weather-rain";
+    textEl.textContent = "Прогнозата е временно недостъпна.";
+    return;
+  }
+
+  rainEl.textContent = weather.willRainSoon ? "Ще вали скоро" : "Без дъжд скоро";
+  rainEl.className = weather.willRainSoon ? "weather-rain rain-yes" : "weather-rain rain-no";
+  textEl.textContent = weather.summary;
+}
+
+async function refreshWeather() {
+  await Promise.all(
+    CONFIG.stops.map(async (stop) => {
+      const card = document.querySelector(`[data-stop-id="${stop.id}"]`);
+      if (!card) return;
+
+      try {
+        const weather = await fetchWeather(stop);
+        cachedWeather.set(stop.id, weather);
+        renderWeatherCard(card, weather);
+      } catch {
+        renderWeatherCard(card, cachedWeather.get(stop.id) ?? null);
+      }
+    }),
+  );
 }
 
 async function fetchBoard(stopId) {
@@ -520,6 +638,7 @@ function bindInstallPrompt() {
   refreshButton?.addEventListener("click", () => {
     statusEl.textContent = "Обновяване...";
     refresh();
+    refreshWeather();
   });
 }
 
@@ -565,7 +684,9 @@ if (initialCache) {
 }
 
 refresh();
+refreshWeather();
 setInterval(refresh, CONFIG.refreshMs);
+setInterval(refreshWeather, CONFIG.weatherRefreshMs);
 setInterval(() => {
   renderAll();
   maybeNotify();

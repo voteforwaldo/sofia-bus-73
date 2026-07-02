@@ -243,6 +243,54 @@ h1 {
   font-size: 0.88rem;
 }
 
+.weather {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.9rem;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.weather-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.weather-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.weather-rain {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.weather-rain.rain-yes {
+  background: rgba(59, 130, 246, 0.18);
+  color: #2563eb;
+}
+
+.weather-rain.rain-no {
+  background: rgba(31, 122, 77, 0.14);
+  color: var(--ok);
+}
+
+.weather-text {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .status-badge {
   flex-shrink: 0;
   padding: 0.35rem 0.55rem;
