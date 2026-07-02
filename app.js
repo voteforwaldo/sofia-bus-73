@@ -6,19 +6,19 @@ import {
   saveCache,
   saveNotifiedState,
   saveSettings,
-} from "./settings.js?v=12";
+} from "./settings.js?v=13";
 import {
   dedupeDepartures,
   filterLine73Departures,
   getConfidence,
   getStatusBadge,
   parseBoardResponse,
-} from "./lib/transit.js?v=12";
+} from "./lib/transit.js?v=13";
 import {
   formatTypicalDelay,
   getTypicalDelay,
   recordDelay,
-} from "./lib/delay-history.js?v=12";
+} from "./lib/delay-history.js?v=13";
 import {
   buildJourneysForRoute,
   buildTripIndex,
@@ -26,9 +26,9 @@ import {
   getLeaveMessageForJourney,
   getRoute,
   ROUTES,
-} from "./lib/routes.js?v=12";
-import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=12";
-import { BUILD_VERSION } from "./lib/version.js?v=12";
+} from "./lib/routes.js?v=13";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=13";
+import { BUILD_VERSION } from "./lib/version.js?v=13";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
 const APP_VERSION = BUILD_VERSION;
@@ -415,9 +415,22 @@ function renderRouteCard() {
     .map((journey) => {
       const itemBreakdown = getJourneyBreakdown(journey, walkingMinutes, now);
       const itemBadge = getStatusBadge(journey);
-      return `<li>
-        <span>${formatClock(itemBreakdown.destinationArrival)}</span>
-        <span class="upcoming-dest">автобус ${formatClock(journey.arrivalTime)}</span>
+      const busClock = formatClock(journey.arrivalTime);
+      const arriveClock = formatClock(itemBreakdown.destinationArrival);
+      const waitLabel = formatMinutes(journey.arrivalTime - now);
+
+      return `<li class="upcoming-item">
+        <div class="upcoming-lines">
+          <p class="upcoming-row">
+            <span class="upcoming-key">🚌 На спирката</span>
+            <span class="upcoming-val">${busClock}</span>
+            <span class="upcoming-extra">след ${waitLabel}</span>
+          </p>
+          <p class="upcoming-row upcoming-row--sub">
+            <span class="upcoming-key">🏁 В ${destinationStop.shortName}</span>
+            <span class="upcoming-val">${arriveClock}</span>
+          </p>
+        </div>
         <span class="upcoming-badge ${itemBadge.className}">${itemBadge.text}</span>
       </li>`;
     })

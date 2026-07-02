@@ -750,9 +750,17 @@ h1 {
 }
 
 .upcoming h3 {
-  margin: 0 0 0.65rem;
+  margin: 0 0 0.35rem;
   font-size: 0.92rem;
   font-weight: 900;
+}
+
+.upcoming-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .upcoming ul {
@@ -763,23 +771,56 @@ h1 {
   gap: 0.5rem;
 }
 
-.upcoming li {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.5rem;
-  align-items: center;
+.upcoming-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.55rem;
   padding: 0.75rem 0.85rem;
   border-radius: 1rem;
   background: rgba(255, 255, 255, 0.65);
-  font-size: 0.85rem;
-  font-weight: 700;
   border: 1px solid rgba(255, 141, 96, 0.12);
 }
 
-.upcoming-dest {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.upcoming-lines {
+  flex: 1;
+  min-width: 0;
+}
+
+.upcoming-row {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.upcoming-row--sub {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.upcoming-key {
+  font-weight: 800;
+}
+
+.upcoming-val {
+  font-weight: 900;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.upcoming-row--sub .upcoming-val {
+  font-size: 0.88rem;
+}
+
+.upcoming-extra {
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: var(--muted);
 }
 
 .upcoming-badge {
