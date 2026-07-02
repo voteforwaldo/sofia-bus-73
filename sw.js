@@ -1,4 +1,4 @@
-const CACHE_NAME = "bus73-v5";
+const CACHE_NAME = "bus73-v6";
 const STATIC_ASSETS = [
   "/index.html",
   "/styles.css",

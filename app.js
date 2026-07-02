@@ -123,42 +123,47 @@ function getLeaveMessage(arrivalTime, walkingMinutes) {
   const leaveIn = arrivalTime - Date.now() - walkingMinutes * 60_000;
 
   if (leaveIn <= 0) {
-    return { text: "Тръгни сега!", className: "leave-now urgent" };
+    return { text: "🏃 Тръгни сега!", className: "leave-now urgent" };
   }
 
   return {
-    text: `Тръгни след ${formatMinutes(leaveIn)}`,
+    text: `🚶 Тръгни след ${formatMinutes(leaveIn)}`,
     className: leaveIn <= 2 * 60_000 ? "leave-now soon" : "leave-now",
   };
 }
 
+const STOP_EMOJI = {
+  tokuda: "🏥",
+  bulgaria: "🌇",
+};
+
 function createStopCard(stop) {
   const card = document.createElement("section");
-  card.className = "stop-card";
+  card.className = `stop-card stop-card--${stop.id}`;
   card.dataset.stopId = stop.id;
   card.innerHTML = `
     <div class="stop-header">
       <div>
-        <h2>${stop.name}</h2>
+        <h2><span class="stop-emoji">${STOP_EMOJI[stop.id] ?? "🚏"}</span> ${stop.name}</h2>
         <p class="direction">→ ${stop.directionLabel}</p>
       </div>
       <span class="status-badge status-scheduled">—</span>
     </div>
     <div class="weather" aria-live="polite">
       <div class="weather-header">
-        <span class="weather-title">Време · Gemini</span>
+        <span class="weather-title">🌤️ Време · Gemini</span>
         <span class="weather-rain">—</span>
       </div>
       <p class="weather-text">Зареждане на прогноза...</p>
     </div>
     <div class="arrival" aria-live="polite">
-      <p class="label">Следващ автобус след</p>
+      <p class="label">⏱️ Следващ автобус след</p>
       <p class="time">—</p>
       <p class="leave-now">—</p>
       <p class="meta">Зареждане...</p>
     </div>
     <div class="upcoming" hidden>
-      <h3>Следващи курсове</h3>
+      <h3>🗓️ Следващи курсове</h3>
       <ul></ul>
     </div>
   `;
@@ -166,7 +171,7 @@ function createStopCard(stop) {
   return card;
 }
 
-const APP_VERSION = "5";
+const APP_VERSION = "6";
 
 const RAIN_CODES = new Set([
   51, 52, 53, 54, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
@@ -262,7 +267,7 @@ function renderWeatherCard(card, weather) {
     return;
   }
 
-  rainEl.textContent = weather.willRainSoon ? "Ще вали скоро" : "Без дъжд скоро";
+  rainEl.textContent = weather.willRainSoon ? "🌧️ Ще вали скоро" : "☀️ Без дъжд скоро";
   rainEl.className = weather.willRainSoon ? "weather-rain rain-yes" : "weather-rain rain-no";
   textEl.textContent = weather.summary;
 }
@@ -395,8 +400,8 @@ function renderWidget() {
 
       const diff = arrivals[0].arrivalTime - Date.now();
       return `
-        <div class="widget-item">
-          <span class="widget-stop">${stop.shortName}</span>
+        <div class="widget-item widget-item--${stop.id}">
+          <span class="widget-stop">${STOP_EMOJI[stop.id] ?? "🚏"} ${stop.shortName}</span>
           <span class="widget-time ${diff <= 3 * 60_000 ? "soon" : ""}">${formatMinutes(diff)}</span>
         </div>
       `;
