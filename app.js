@@ -152,8 +152,19 @@ function createStopCard(stop) {
   return card;
 }
 
+function getBoardUrl(stopId) {
+  const isLocal =
+    location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+  if (isLocal) {
+    return `${CONFIG.apiBase}/virtual-board/${stopId}?limit=${CONFIG.limit}`;
+  }
+
+  return `/api/board?stopId=${encodeURIComponent(stopId)}&limit=${CONFIG.limit}`;
+}
+
 async function fetchBoard(stopId) {
-  const response = await fetch(`${CONFIG.apiBase}/virtual-board/${stopId}?limit=${CONFIG.limit}`);
+  const response = await fetch(getBoardUrl(stopId));
   if (!response.ok) {
     throw new Error(`API грешка ${response.status} за спирка ${stopId}`);
   }
@@ -163,6 +174,7 @@ async function fetchBoard(stopId) {
 
 async function fetchArrivalsForStop(stop) {
   const boards = await Promise.allSettled(stop.stopIds.map((stopId) => fetchBoard(stopId)));
+  const failedBoards = boards.filter((result) => result.status === "rejected").length;
 
   const departures = boards
     .filter((result) => result.status === "fulfilled")
@@ -185,7 +197,7 @@ async function fetchArrivalsForStop(stop) {
     unique.push(departure);
   }
 
-  return unique;
+  return { departures: unique, failedBoards };
 }
 
 function renderStopCard(card, stop, arrivals) {
@@ -341,14 +353,19 @@ async function refresh() {
   try {
     const results = await Promise.all(
       CONFIG.stops.map(async (stop) => {
-        const arrivals = await fetchArrivalsForStop(stop);
-        cachedArrivals.set(stop.id, arrivals);
-        return arrivals;
+        const { departures, failedBoards } = await fetchArrivalsForStop(stop);
+        cachedArrivals.set(stop.id, departures);
+        return { departures, failedBoards };
       }),
     );
 
-    if (results.every((arrivals) => arrivals.length === 0)) {
-      throw new Error("Няма налични данни за избраните спирки.");
+    const allFailed = results.every((result) => result.failedBoards > 0 && result.departures.length === 0);
+    if (allFailed) {
+      throw new Error("Неуспешна връзка с API. Опитайте отново след малко.");
+    }
+
+    if (results.every((result) => result.departures.length === 0)) {
+      throw new Error("Няма активни курсове в момента (възможно е извън работно време).");
     }
 
     isStale = false;
