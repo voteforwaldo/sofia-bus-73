@@ -1,0 +1,19 @@
+{
+  "name": "Автобус 73 София",
+  "short_name": "Бус 73",
+  "description": "Кога идва автобус 73 на Токуда и бул. България",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f1ec",
+  "theme_color": "#bd202e",
+  "orientation": "portrait-primary",
+  "lang": "bg",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

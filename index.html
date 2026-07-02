@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#bd202e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Бус 73">
+  <meta name="description" content="Кога идва автобус 73 на Токуда и бул. България">
+  <title>Автобус 73</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <div class="header-top">
+        <div>
+          <p class="eyebrow">София · livetransport.eu</p>
+          <h1>Автобус <span class="line-badge">73</span></h1>
+        </div>
+        <button id="settings-toggle" class="icon-button" type="button" aria-expanded="false" aria-controls="settings-panel">
+          ⚙
+        </button>
+      </div>
+
+      <div id="widget" class="widget" hidden></div>
+      <div id="install-banner" class="install-banner" hidden>
+        <p>Инсталирай приложението на началния екран за бърз достъп.</p>
+        <button id="install-button" class="button" type="button">Инсталирай</button>
+        <button id="install-dismiss" class="button ghost" type="button">Не сега</button>
+      </div>
+    </header>
+
+    <section id="settings-panel" class="settings-panel" hidden>
+      <h2>Настройки</h2>
+
+      <label class="field">
+        <span>Минути пеша до Токуда</span>
+        <input id="walk-tokuda" type="number" min="0" max="30" step="1">
+      </label>
+
+      <label class="field">
+        <span>Минути пеша до бул. България</span>
+        <input id="walk-bulgaria" type="number" min="0" max="30" step="1">
+      </label>
+
+      <label class="toggle">
+        <input id="notifications-enabled" type="checkbox">
+        <span>Известия преди пристигане</span>
+      </label>
+
+      <p class="settings-hint">Известията работят най-добре с инсталирано PWA. Ще получиш сигнал на 10 и 5 минути преди автобуса.</p>
+
+      <button id="enable-notifications" class="button" type="button">Разреши известия</button>
+    </section>
+
+    <div id="stops" class="stops"></div>
+
+    <footer>
+      <p id="status">Обновяване...</p>
+      <p class="note">Данните идват от Център за градска мобилност чрез livetransport.eu</p>
+    </footer>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "sofia-bus-73",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Показва кога идва автобус 73 на спирка Токуда и бул. България",
+  "scripts": {
+    "start": "npx --yes serve -l 3000 .",
+    "dev": "npx --yes serve -l 3000 ."
+  }
+}
