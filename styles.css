@@ -205,6 +205,14 @@ h1 {
   gap: 0.5rem;
 }
 
+.install-banner[hidden] {
+  display: none !important;
+}
+
+.settings-panel[hidden] {
+  display: none !important;
+}
+
 .stops {
   display: grid;
   gap: 0.85rem;

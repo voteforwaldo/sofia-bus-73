@@ -153,7 +153,7 @@ function createStopCard(stop) {
   return card;
 }
 
-const APP_VERSION = "3";
+const APP_VERSION = "4";
 
 function getBoardUrl(stopId) {
   const isLocal =
@@ -456,13 +456,51 @@ function bindSettings() {
   });
 }
 
+function isInstalledPwa() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true ||
+    localStorage.getItem("bus73-pwa-installed") === "1"
+  );
+}
+
+function hideInstallBanner() {
+  if (installBanner) {
+    installBanner.hidden = true;
+  }
+}
+
 function bindInstallPrompt() {
+  if (isInstalledPwa()) {
+    hideInstallBanner();
+    return;
+  }
+
+  if (localStorage.getItem("bus73-install-dismissed")) {
+    hideInstallBanner();
+  }
+
+  window.addEventListener("appinstalled", () => {
+    localStorage.setItem("bus73-pwa-installed", "1");
+    hideInstallBanner();
+  });
+
+  window.matchMedia("(display-mode: standalone)").addEventListener("change", (event) => {
+    if (event.matches) {
+      localStorage.setItem("bus73-pwa-installed", "1");
+      hideInstallBanner();
+    }
+  });
+
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     deferredInstallPrompt = event;
-    if (!localStorage.getItem("bus73-install-dismissed")) {
-      installBanner.hidden = false;
+
+    if (isInstalledPwa() || localStorage.getItem("bus73-install-dismissed")) {
+      return;
     }
+
+    installBanner.hidden = false;
   });
 
   installButton.addEventListener("click", async () => {
@@ -470,12 +508,13 @@ function bindInstallPrompt() {
     deferredInstallPrompt.prompt();
     await deferredInstallPrompt.userChoice;
     deferredInstallPrompt = null;
-    installBanner.hidden = true;
+    localStorage.setItem("bus73-pwa-installed", "1");
+    hideInstallBanner();
   });
 
   installDismiss.addEventListener("click", () => {
-    installBanner.hidden = true;
     localStorage.setItem("bus73-install-dismissed", "1");
+    hideInstallBanner();
   });
 
   refreshButton?.addEventListener("click", () => {
