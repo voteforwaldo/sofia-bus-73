@@ -6,30 +6,32 @@ import {
   saveCache,
   saveNotifiedState,
   saveSettings,
-} from "./settings.js?v=15";
+} from "./settings.js?v=16";
 import {
   dedupeDepartures,
   filterLine73Departures,
+  getBoardingPhase,
   getConfidence,
   getStatusBadge,
   parseBoardResponse,
-} from "./lib/transit.js?v=15";
+} from "./lib/transit.js?v=16";
 import {
   formatTypicalDelay,
   getTypicalDelay,
   recordDelay,
-} from "./lib/delay-history.js?v=15";
+} from "./lib/delay-history.js?v=16";
 import {
   buildJourneysForRoute,
   buildTripIndex,
+  getDirectionStopIds,
   getJourneyBreakdown,
   getLeaveMessageForJourney,
   getRoute,
   ROUTES,
-} from "./lib/routes.js?v=15";
-import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=15";
-import { BUILD_VERSION } from "./lib/version.js?v=15";
-import { formatCelsius, formatTemperatureLine } from "./lib/temperature.js?v=15";
+} from "./lib/routes.js?v=16";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=16";
+import { BUILD_VERSION } from "./lib/version.js?v=16";
+import { formatCelsius, formatTemperatureLine } from "./lib/temperature.js?v=16";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
 const APP_VERSION = BUILD_VERSION;
@@ -51,6 +53,10 @@ const CONFIG = {
       lat: 42.66716,
       lon: 23.32672,
       stopIds: ["0205", "0206", "2777"],
+      directionStopIds: {
+        mladost: ["0206"],
+        ovchaKupel: ["2777"],
+      },
     },
     {
       id: "bulgaria",
@@ -59,6 +65,10 @@ const CONFIG = {
       lat: 42.67262,
       lon: 23.2937,
       stopIds: ["0290", "0291", "6564", "6275"],
+      directionStopIds: {
+        mladost: ["6275"],
+        ovchaKupel: ["6564"],
+      },
     },
   ],
 };
@@ -298,9 +308,20 @@ function buildJourneyData(boardCache, now = Date.now()) {
   for (const route of Object.values(ROUTES)) {
     const boardingStop = STOP_BY_ID[route.boardingStopId];
     const destinationStop = STOP_BY_ID[route.destinationStopId];
-    const rawDepartures = boardingStop.stopIds.flatMap((stopId) => boardCache.get(stopId) ?? []);
+    const boardingStopIds = new Set(getDirectionStopIds(boardingStop, route.boardingDirection));
+    const destinationStopIds = getDirectionStopIds(destinationStop, route.destinationDirection);
+    const rawDepartures = boardingStop.stopIds.flatMap((stopId) =>
+      (boardCache.get(stopId) ?? []).map((departure) => ({
+        ...departure,
+        physicalStopId: stopId,
+      })),
+    );
     const boardingDepartures = dedupeDepartures(
-      filterLine73Departures(rawDepartures, route.matchDirection, now),
+      filterLine73Departures(
+        rawDepartures.filter((departure) => boardingStopIds.has(departure.physicalStopId)),
+        route.matchDirection,
+        now,
+      ),
     );
 
     for (const departure of boardingDepartures) {
@@ -312,7 +333,7 @@ function buildJourneyData(boardCache, now = Date.now()) {
     const journeys = buildJourneysForRoute(
       route,
       boardingDepartures,
-      destinationStop.stopIds,
+      destinationStopIds,
       tripIndex,
       now,
     );
@@ -404,6 +425,8 @@ function renderRouteCard() {
     `Качваш се: ${boardingStop.name} · посока ${route.directionLabel}`;
 
   const busTimeEl = routeCardEl.querySelector(".route-bus-time");
+  const busClockEl = routeCardEl.querySelector(".route-bus-clock");
+  const busLabelEl = routeCardEl.querySelector(".route-bus-label");
   const destinationEl = routeCardEl.querySelector(".route-destination");
   const breakdownEl = routeCardEl.querySelector(".route-breakdown");
   const leaveEl = routeCardEl.querySelector(".leave-now");
@@ -415,8 +438,10 @@ function renderRouteCard() {
   const upcomingListEl = routeCardEl.querySelector(".upcoming ul");
 
   if (journeys.length === 0) {
+    busLabelEl.textContent = "🚌 Тръгва от спирката след";
     busTimeEl.textContent = "няма данни";
     busTimeEl.className = "route-bus-time none";
+    busClockEl.textContent = "";
     destinationEl.textContent = "—";
     breakdownEl.innerHTML = "";
     leaveEl.textContent = "";
@@ -438,11 +463,25 @@ function renderRouteCard() {
   const confidence = next.confidence ?? getConfidence(next);
   const totalDiff = next.destinationArrival - now;
   const busDiff = next.arrivalTime - now;
+  const boardingPhase = getBoardingPhase(next, now);
+  const busClock = formatClock(next.arrivalTime);
 
-  if (busDiff <= 0) {
-    busTimeEl.textContent = "сега на спирката";
+  busClockEl.textContent = `⏰ Тръгва в ${busClock}`;
+
+  if (boardingPhase === "at_stop") {
+    busLabelEl.textContent = "🚌 Автобус на спирката";
+    busTimeEl.textContent = `тръгва след ${formatMinutes(busDiff)}`;
+    busTimeEl.className = "route-bus-time soon at-stop";
+  } else if (boardingPhase === "at_stop_departing") {
+    busLabelEl.textContent = "🚌 Автобус на спирката";
+    busTimeEl.textContent = "тръгва сега";
+    busTimeEl.className = "route-bus-time soon at-stop";
+  } else if (boardingPhase === "due") {
+    busLabelEl.textContent = "🚌 Тръгва от спирката";
+    busTimeEl.textContent = "сега";
     busTimeEl.className = "route-bus-time soon";
   } else {
+    busLabelEl.textContent = "🚌 Тръгва от спирката след";
     busTimeEl.textContent = formatMinutes(busDiff);
     busTimeEl.className = busDiff <= 3 * 60_000 ? "route-bus-time soon" : "route-bus-time";
   }
@@ -506,7 +545,7 @@ function renderRouteCard() {
       return `<li class="upcoming-item">
         <div class="upcoming-lines">
           <p class="upcoming-row">
-            <span class="upcoming-key">🚌 На спирката</span>
+            <span class="upcoming-key">🚌 Тръгва от спирката</span>
             <span class="upcoming-val">${busClock}</span>
             <span class="upcoming-extra">след ${waitLabel}</span>
           </p>
