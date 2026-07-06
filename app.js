@@ -6,19 +6,19 @@ import {
   saveCache,
   saveNotifiedState,
   saveSettings,
-} from "./settings.js?v=14";
+} from "./settings.js?v=15";
 import {
   dedupeDepartures,
   filterLine73Departures,
   getConfidence,
   getStatusBadge,
   parseBoardResponse,
-} from "./lib/transit.js?v=14";
+} from "./lib/transit.js?v=15";
 import {
   formatTypicalDelay,
   getTypicalDelay,
   recordDelay,
-} from "./lib/delay-history.js?v=14";
+} from "./lib/delay-history.js?v=15";
 import {
   buildJourneysForRoute,
   buildTripIndex,
@@ -26,10 +26,10 @@ import {
   getLeaveMessageForJourney,
   getRoute,
   ROUTES,
-} from "./lib/routes.js?v=14";
-import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=14";
-import { BUILD_VERSION } from "./lib/version.js?v=14";
-import { formatCelsius, formatTemperatureLine } from "./lib/temperature.js?v=14";
+} from "./lib/routes.js?v=15";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=15";
+import { BUILD_VERSION } from "./lib/version.js?v=15";
+import { formatCelsius, formatTemperatureLine } from "./lib/temperature.js?v=15";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
 const APP_VERSION = BUILD_VERSION;
@@ -39,6 +39,7 @@ const CONFIG = {
   lineId: "TB39",
   lineNumber: "73",
   refreshMs: 30_000,
+  fastRefreshMs: 10_000,
   weatherRefreshMs: 20 * 60_000,
   newsRefreshMs: 45 * 60_000,
   limit: 40,
@@ -87,6 +88,7 @@ let dataSource = "live";
 let deferredInstallPrompt = null;
 let notifiedState = loadNotifiedState();
 let refreshInFlight = null;
+let lastFastRefreshAt = 0;
 
 const SOURCE_PRIORITY = {
   livetransport: 0,
@@ -138,6 +140,34 @@ function formatClock(timestamp) {
 
 function notificationKey(threshold) {
   return String(threshold);
+}
+
+function formatDataAge(updatedAt) {
+  if (!updatedAt) return null;
+  const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
+  if (seconds < 5) return "току-що";
+  if (seconds < 60) return `преди ${seconds} сек`;
+  return `преди ${Math.round(seconds / 60)} мин`;
+}
+
+function getSoonBusDiff() {
+  const route = getActiveRoute();
+  const next = (cachedJourneys.get(route.id) ?? [])[0];
+  if (!next?.arrivalTime) return null;
+  return next.arrivalTime - Date.now();
+}
+
+function maybeFastRefresh() {
+  const busDiff = getSoonBusDiff();
+  if (busDiff == null || busDiff > 5 * 60_000 || busDiff < -30_000) return;
+  if (!lastUpdatedAt) return;
+
+  const sinceRefresh = Date.now() - lastUpdatedAt;
+  const sinceFast = Date.now() - lastFastRefreshAt;
+  if (sinceRefresh >= CONFIG.fastRefreshMs && sinceFast >= CONFIG.fastRefreshMs) {
+    lastFastRefreshAt = Date.now();
+    refresh();
+  }
 }
 
 function isLocalHost() {
@@ -409,8 +439,13 @@ function renderRouteCard() {
   const totalDiff = next.destinationArrival - now;
   const busDiff = next.arrivalTime - now;
 
-  busTimeEl.textContent = formatMinutes(busDiff);
-  busTimeEl.className = busDiff <= 3 * 60_000 ? "route-bus-time soon" : "route-bus-time";
+  if (busDiff <= 0) {
+    busTimeEl.textContent = "сега на спирката";
+    busTimeEl.className = "route-bus-time soon";
+  } else {
+    busTimeEl.textContent = formatMinutes(busDiff);
+    busTimeEl.className = busDiff <= 3 * 60_000 ? "route-bus-time soon" : "route-bus-time";
+  }
 
   destinationEl.textContent =
     `🏁 До ${destinationStop.shortName}: ${formatMinutes(totalDiff)} · около ${formatClock(breakdown.destinationArrival)}`;
@@ -430,7 +465,15 @@ function renderRouteCard() {
   badgeEl.className = `status-badge ${badge.className}`;
   confidenceBadgeEl.textContent = confidence.label;
   confidenceBadgeEl.className = `confidence-badge ${confidence.className}`;
-  confidenceHintEl.textContent = confidence.hint;
+
+  const dataAge = formatDataAge(lastUpdatedAt);
+  const staleData =
+    lastUpdatedAt &&
+    busDiff <= 3 * 60_000 &&
+    Date.now() - lastUpdatedAt > 15_000;
+  confidenceHintEl.textContent = staleData
+    ? `${confidence.hint} · обновено ${dataAge}`
+    : confidence.hint;
 
   const typical = getTypicalDelay(boardingStop.id);
   const typicalText = formatTypicalDelay(typical);
@@ -932,6 +975,7 @@ setInterval(refreshNews, CONFIG.newsRefreshMs);
 setInterval(() => {
   renderAll();
   maybeNotify();
+  maybeFastRefresh();
 }, 1000);
 
 window.addEventListener("error", (event) => reportError(event.error ?? new Error(event.message)));
