@@ -6,19 +6,19 @@ import {
   saveCache,
   saveNotifiedState,
   saveSettings,
-} from "./settings.js?v=13";
+} from "./settings.js?v=14";
 import {
   dedupeDepartures,
   filterLine73Departures,
   getConfidence,
   getStatusBadge,
   parseBoardResponse,
-} from "./lib/transit.js?v=13";
+} from "./lib/transit.js?v=14";
 import {
   formatTypicalDelay,
   getTypicalDelay,
   recordDelay,
-} from "./lib/delay-history.js?v=13";
+} from "./lib/delay-history.js?v=14";
 import {
   buildJourneysForRoute,
   buildTripIndex,
@@ -26,9 +26,10 @@ import {
   getLeaveMessageForJourney,
   getRoute,
   ROUTES,
-} from "./lib/routes.js?v=13";
-import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=13";
-import { BUILD_VERSION } from "./lib/version.js?v=13";
+} from "./lib/routes.js?v=14";
+import { PRECIPITATION_CODES, weatherLabel } from "./lib/weather.js?v=14";
+import { BUILD_VERSION } from "./lib/version.js?v=14";
+import { formatCelsius, formatTemperatureLine } from "./lib/temperature.js?v=14";
 
 const PRODUCTION_HOST = "sofia-bus-73.vercel.app";
 const APP_VERSION = BUILD_VERSION;
@@ -39,6 +40,7 @@ const CONFIG = {
   lineNumber: "73",
   refreshMs: 30_000,
   weatherRefreshMs: 20 * 60_000,
+  newsRefreshMs: 45 * 60_000,
   limit: 40,
   stops: [
     {
@@ -78,6 +80,7 @@ const pullIndicator = document.getElementById("pull-indicator");
 let settings = loadSettings();
 let cachedJourneys = new Map();
 let cachedWeather = new Map();
+let cachedNewsBrief = null;
 let lastUpdatedAt = null;
 let isStale = false;
 let dataSource = "live";
@@ -162,16 +165,22 @@ function buildLocalWeatherSummary(stopName, forecast) {
       hour.precipitation > 0.1 || hour.probability >= 45 || PRECIPITATION_CODES.has(hour.code),
   );
 
-  const temp = Math.round(current.temperature_2m);
+  const temperature = current.temperature_2m;
+  const feelsLike = current.apparent_temperature;
   const condition = weatherLabel(current.weather_code);
+  const temperatureLine = formatTemperatureLine(temperature, feelsLike, condition);
   const rainText = willRainSoon
     ? "Да, очаква се дъжд скоро — вземи чадър."
     : "Не, дъжд скоро не се очаква.";
 
   return {
-    summary: `При ${stopName} сега е около ${temp}°C и ${condition}. ${rainText}`,
+    summary: `При ${stopName} сега е ${temperatureLine}. ${rainText}`,
     willRainSoon,
-    temperature: current.temperature_2m,
+    temperature,
+    feelsLike,
+    temperatureLabel: formatCelsius(temperature),
+    feelsLikeLabel: formatCelsius(feelsLike),
+    temperatureLine,
     condition,
     source: "open-meteo",
   };
@@ -182,8 +191,8 @@ async function fetchLocalWeather(stop) {
     latitude: stop.lat,
     longitude: stop.lon,
     timezone: "Europe/Sofia",
-    current: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
-    hourly: "precipitation_probability,precipitation,weather_code",
+    current: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,relative_humidity_2m",
+    hourly: "precipitation_probability,precipitation,weather_code,temperature_2m",
     forecast_hours: "6",
   });
 
@@ -285,18 +294,50 @@ function buildJourneyData(boardCache, now = Date.now()) {
 
 function renderWeather(weather) {
   const rainEl = routeCardEl.querySelector(".weather-rain");
+  const tempEl = routeCardEl.querySelector(".weather-temp");
   const textEl = routeCardEl.querySelector(".weather-text");
 
   if (!weather) {
     rainEl.textContent = "—";
     rainEl.className = "weather-rain";
+    tempEl.textContent = "—";
     textEl.textContent = "Прогнозата е временно недостъпна.";
     return;
   }
 
   rainEl.textContent = weather.willRainSoon ? "🌧️ Ще вали скоро" : "☀️ Без дъжд скоро";
   rainEl.className = weather.willRainSoon ? "weather-rain rain-yes" : "weather-rain rain-no";
+  tempEl.textContent = weather.temperatureLine ?? weather.temperatureLabel ?? formatCelsius(weather.temperature) ?? "—";
   textEl.textContent = weather.summary;
+}
+
+function renderNewsBrief(brief) {
+  const newsEl = routeCardEl.querySelector(".news-brief");
+  if (!newsEl) return;
+  newsEl.textContent = brief ?? "💡 Новините са временно недостъпни.";
+}
+
+async function fetchNews() {
+  if (isLocalHost()) {
+    return {
+      brief: "💡 Локално: новините се зареждат от /api/news на production.",
+      source: "local",
+    };
+  }
+
+  const response = await fetch("/api/news");
+  if (!response.ok) throw new Error("News unavailable");
+  return response.json();
+}
+
+async function refreshNews() {
+  try {
+    const news = await fetchNews();
+    cachedNewsBrief = news.brief;
+    renderNewsBrief(cachedNewsBrief);
+  } catch {
+    renderNewsBrief(cachedNewsBrief);
+  }
 }
 
 async function refreshWeather() {
@@ -611,6 +652,7 @@ function bindRouteSwitch() {
     saveSettings(settings);
     renderAll();
     refreshWeather();
+    refreshNews();
   });
 }
 
@@ -710,6 +752,7 @@ function bindPullToRefresh() {
         statusEl.textContent = "Обновяване...";
         await refresh();
         await refreshWeather();
+        await refreshNews();
       }
     },
     { passive: true },
@@ -785,6 +828,7 @@ function bindInstallPrompt() {
     try {
       await refresh();
       await refreshWeather();
+      await refreshNews();
     } catch (error) {
       reportError(error);
     }
@@ -881,8 +925,10 @@ if (initialCache) {
 
 refresh();
 refreshWeather();
+refreshNews();
 setInterval(refresh, CONFIG.refreshMs);
 setInterval(refreshWeather, CONFIG.weatherRefreshMs);
+setInterval(refreshNews, CONFIG.newsRefreshMs);
 setInterval(() => {
   renderAll();
   maybeNotify();

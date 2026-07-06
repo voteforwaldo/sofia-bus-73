@@ -1,4 +1,5 @@
 import { cacheGet, cacheSet } from "../lib/server-cache.js";
+import { formatCelsius, formatTemperatureLine } from "../lib/temperature.js";
 import { PRECIPITATION_CODES, weatherLabel } from "../lib/weather.js";
 
 const CACHE_SECONDS = 20 * 60;
@@ -20,10 +21,19 @@ function analyzeForecast(payload) {
       PRECIPITATION_CODES.has(hour.code),
   );
 
+  const condition = weatherLabel(current.weather_code);
+
   return {
     temperature: current.temperature_2m,
     feelsLike: current.apparent_temperature,
-    condition: weatherLabel(current.weather_code),
+    temperatureLabel: formatCelsius(current.temperature_2m),
+    feelsLikeLabel: formatCelsius(current.apparent_temperature),
+    temperatureLine: formatTemperatureLine(
+      current.temperature_2m,
+      current.apparent_temperature,
+      condition,
+    ),
+    condition,
     windSpeed: current.wind_speed_10m,
     willRainSoon,
     nextHours: hours,
@@ -35,8 +45,8 @@ async function fetchOpenMeteo(lat, lon) {
     latitude: lat,
     longitude: lon,
     timezone: "Europe/Sofia",
-    current: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
-    hourly: "precipitation_probability,precipitation,weather_code",
+    current: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,relative_humidity_2m",
+    hourly: "precipitation_probability,precipitation,weather_code,temperature_2m",
     forecast_hours: "6",
   });
 
@@ -53,7 +63,7 @@ async function summarizeWithGemini(stopName, analysis) {
   if (!apiKey) return null;
 
   const prompt = `Ти си кратък български метео асистент. На база РЕАЛНИ данни за спирка "${stopName}" в София, напиши точно 2 кратки изречения на български:
-1) какво е времето сега (температура и условия)
+1) какво е времето сега — задължително посочи температурата в ЦЕЛЗИЙ (°C) с точност до десета (${analysis.temperatureLabel})
 2) дали ЩЕ ВАЛИ СКОРО в следващите 1-3 часа (ясно кажи "да" или "не")
 
 Данни:
@@ -87,7 +97,7 @@ function fallbackSummary(stopName, analysis) {
     ? "Да, очаква се дъжд скоро — вземи чадър."
     : "Не, дъжд скоро не се очаква.";
 
-  return `При ${stopName} сега е около ${Math.round(analysis.temperature)}°C и ${analysis.condition}. ${rainText}`;
+  return `При ${stopName} сега е ${analysis.temperatureLine}. ${rainText}`;
 }
 
 export default async function handler(req, res) {
@@ -116,6 +126,10 @@ export default async function handler(req, res) {
       summary,
       willRainSoon: analysis.willRainSoon,
       temperature: analysis.temperature,
+      feelsLike: analysis.feelsLike,
+      temperatureLabel: analysis.temperatureLabel,
+      feelsLikeLabel: analysis.feelsLikeLabel,
+      temperatureLine: analysis.temperatureLine,
       condition: analysis.condition,
       source: process.env.GEMINI_API_KEY ? "gemini+open-meteo" : "open-meteo",
     };

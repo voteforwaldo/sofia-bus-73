@@ -1,4 +1,4 @@
-const CACHE_NAME = "bus73-v13";
+const CACHE_NAME = "bus73-v14";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
@@ -10,6 +10,7 @@ const STATIC_ASSETS = [
   "/lib/routes.js",
   "/lib/delay-history.js",
   "/lib/weather.js",
+  "/lib/temperature.js",
   "/manifest.json",
   "/icon.svg",
 ];
